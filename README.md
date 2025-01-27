@@ -1,5 +1,5 @@
 # US-DICOMizer
-
+![US-DICOMizer main view](images/US-dicomizer_app_main_window_01.jpg)
 ## Changelog
 ### Changes in version 4.14  
 
