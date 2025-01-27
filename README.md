@@ -1,6 +1,10 @@
 # US-DICOMizer
 
 ## Changelog
+### Changes in version 4.14  
+
+### Changes in version 4.13  
+
 ### Changes in version 4.12  
 Smaller font size in treeviews  
 Separation of attributes into metadata and dataset  
