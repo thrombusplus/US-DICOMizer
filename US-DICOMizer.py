@@ -21,6 +21,15 @@ import time
 from time import strftime
 
 '''
+αν
+[settings]
+user_can_change_compression_level = no
+τότε στο settings παράθυρο το text enty ειναι disabled
+
+προσθήκη του free text
+μικρές αλλαγές στο footer
+
+4.12
 Μίκρυνα τις γραμματισειρές στα treeview
 Χώρισα τα attributes σε metadata και dataset
 Προσθήκη δυνατότητας copy με δεξί κλίκ των τιμών απο το treeview με τα tags
@@ -33,7 +42,7 @@ from time import strftime
 να μπει checkbox για edit στα tags
 '''
 
-version = "4.12"
+version = "4.13"
 temp_output_dir = None
 zcount = 0
 #app_dir = os.path.join(os.environ['USERPROFILE'],".anonymizer")
@@ -246,11 +255,9 @@ except Exception as e:
 '''
 *** first need to install ***
 pip install pydicom
-pip install SimpleITK
 pip install Pillow
 pip install numpy
 pip install matplotlib
-pip install --pre scikit-image
 
 maybe
 pip install --upgrade scipy
@@ -274,14 +281,21 @@ def settings():
         
         settings_01 = ttk.Frame(settings_window)
         settings_01.pack()
-        
+
         compression_level_label = ttk.Label(settings_01, text="Compression level (0-95): ")
         compression_level_label.grid(column=0, row=0, sticky="w")
-        
-        compression_entry = ttk.Entry(settings_01, width=2)
-        compression_entry.grid(column=1, row=0, sticky="w")
-        compression_entry.insert(0,compression_level)
 
+        user_can_change_compression_level = config['settings'].get('user_can_change_compression_level', 'no')
+        if user_can_change_compression_level == "yes":
+            compression_entry = ttk.Entry(settings_01, width=2)
+            compression_entry.grid(column=1, row=0, sticky="w")
+            compression_entry.insert(0,compression_level)
+        else:
+            compression_entry = ttk.Entry(settings_01, width=2)
+            compression_entry.grid(column=1, row=0, sticky="w")
+            compression_entry.insert(0,compression_level)
+            compression_entry.config(state="disabled")
+            
         output_path_settings_label = ttk.Label(settings_01, text=f"Output path")
         output_path_settings_label.grid(column=0, row=1, sticky="w")
 
@@ -938,7 +952,7 @@ def load_zip_and_display():
             load_folder()
             loading_popup.destroy()
             file_count = sum(len(files) for _, _, files in os.walk(output_path))
-            foot_label1.config(text=f"{file_count} files at temp folder")
+            foot_label1.config(text=f"{file_count} files\nat temp folder")
 
         except zipfile.BadZipFile as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}\n\nSelect another file")
@@ -1400,14 +1414,14 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 tree_values = treeview.item(selected_item, "values")
                 file_path = tree_values[1]
                 #print(tree_values[7])
-                print(is_multiframe)
+                #print(is_multiframe)
                 if is_multiframe == True:
                     for item in treeview.get_children():
                         #λαμβάνω τις τιμές της γραμμής
                         current_values = treeview.item(item, "values")
                         updated_values = list(current_values)
                         if int(current_values[7]) > 1:
-                            print(current_values[7])
+                            #print(current_values[7])
                             updated_values[3] = x0
                             updated_values[4] = y0
                             updated_values[5] = x1
@@ -1428,7 +1442,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                         current_values = treeview.item(item, "values")
                         updated_values = list(current_values)
                         if int(current_values[7]) == 1:#αν ειναι sigle frame
-                            print(current_values[7])
+                            #print(current_values[7])
                             updated_values[3] = x0
                             updated_values[4] = y0
                             updated_values[5] = x1
@@ -1527,7 +1541,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 treeview.item(selected_item, tags=())
             '''
 
-        # Σύνδεση του Combobox με την αλλαγή
+        #Σύνδεση του Combobox με την αλλαγή
         tag_combobox.bind("<<ComboboxSelected>>", lambda event: update_tag(event, treeview, selected_item))
             
     #έλεγχος αν το αρχείο DICOM περιέχει δεδομένα εικόνας
@@ -1906,7 +1920,7 @@ def anonymize_selected_files():
         console_message("anonymization completed",level="debug")
 
         file_count = sum(len(files) for _, _, files in os.walk(output_path))
-        foot_label1.config(text=f"{file_count} files at temp folder")
+        foot_label1.config(text=f"{file_count} files\nat temp folder")
 
     apply_anonymization_thread = Thread(target=apply_anonymization, args=())
     apply_anonymization_thread.start()
@@ -2082,7 +2096,7 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
         #Διαγραφή των καθορισμένων tags
         for tag in tags_to_delete:
             if tag in ds:
-                print(ds[tag])
+                #print(ds[tag])#τα tags που διεγράφει
                 del ds[tag]
                 
         patient_s_ID = config['settings'].get('patient_s_ID', 'delete')
@@ -2094,7 +2108,7 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
  
         global output_directory2
         #Αποθήκευση του νέου DICOM αρχείου
-        output_filename = f"{output_directory}/{files_folder}_{fileNo:04_}_{tag_value}.dcm"#με το :04 ορίζω 5 ψηφία και γεμίζω μπροστά με 0
+        output_filename = f"{output_directory}\\{files_folder}_{fileNo:04_}_{tag_value}.dcm"#με το :04 ορίζω 5 ψηφία και γεμίζω μπροστά με 0
         ds.save_as(output_filename, enforce_file_format=True)
         #ds.save_as(output_filename, write_like_original=False)
         output_directory2 = output_directory
@@ -2144,11 +2158,11 @@ def zip_folder():
                 if os.path.isdir(folder_to_del):
                     shutil.rmtree(folder_to_del)
                     
-        messagebox.showinfo("Zip Export", "Export to zip completed.")
+        messagebox.showinfo("ZIP Export", "Export to ZIP completed.")
         
         #διαβάζω το σύνολο των αρχείων dicom που είναι στο output path
         file_count = sum(len(files) for _, _, files in os.walk(output_path))
-        foot_label1.config(text=f"{file_count} files at temp folder")
+        foot_label1.config(text=f"{file_count} files\nat temp folder")
         
 
     except Exception as e:
@@ -2168,7 +2182,7 @@ def del_forlders():
     anonymize_button["state"] = "normal"
     #διαβάζω το σύνολο των αρχείων dicom που είναι στο output path
     file_count = sum(len(files) for _, _, files in os.walk(output_path))
-    foot_label1.config(text=f"{file_count} files at temp folder")
+    foot_label1.config(text=f"{file_count} files\nat temp folder")
     messagebox.showinfo("Delete files", "Temp files deleted successfully")
   
 def OnDoubleClick(event):
@@ -2491,7 +2505,7 @@ button_preview = ttk.Button(frame_1_1, text="Preview",
                             width=8,style='preview.TButton')
 button_preview.grid(row=0, column=2, padx=5, pady=5, sticky="sew")
 
-zip_button = ttk.Button(frame_1_1, text="Export to\nzip files", style="small.TButton",
+zip_button = ttk.Button(frame_1_1, text="Export to\nZIP files", style="small.TButton",
                         command=lambda: zip_folder(), width=8)
 zip_button.grid(row=1, column=2, padx=5, pady=5, sticky="sew")
 
@@ -2500,14 +2514,14 @@ button_clear2.grid(row=2, column=2, padx=5, pady=5, sticky="sew")
 #-----end-------------- frame_1_1 Anonymized Πλαίσιο ---------------------------
 
 #--- start --- Πλαίσιο για το footer ---
-frame_footer = tk.Frame(root, padx=10, pady=10, bg="#00d0c0")
+frame_footer = tk.Frame(root, padx=0, pady=0, bg="#00d0c0")
 frame_footer.grid(row=4, column=0, columnspan=4, sticky="ew")
 
 #διαβάζω το σύνολο των αρχείων dicom που είναι στο output path
 file_count = sum(len(files) for _, _, files in os.walk(output_path))
 
-foot_label1 = tk.Label(frame_footer, text=f"{file_count} files at temp folder", font=("Segoe UI", 8), bg="#00d0c0")
-foot_label1.grid(row=0, column=0, sticky="w")
+foot_label1 = tk.Label(frame_footer, text=f"{file_count} files\nat temp folder", font=("Segoe UI", 8), bg="#00d0c0")
+foot_label1.grid(padx=5, row=0, column=0, sticky="w")
 
 delete_button1 = ttk.Button(frame_footer, text="Delete files", style="small.TButton", command=lambda: del_forlders())
 delete_button1.grid(padx=5, row=0, column=2, sticky="w")
@@ -2515,13 +2529,20 @@ delete_button1.grid(padx=5, row=0, column=2, sticky="w")
 ver_label = tk.Label(frame_footer, text=f"ver: {version}", bg="#00d0c0")
 ver_label.grid(padx=5, row=0, column=3, sticky="w")
 
-log_label = tk.Label(frame_footer, text=f"Console log", bg="#00d0c0")
-log_label.grid(padx=20, row=0, column=4, sticky="e")
+log_label = tk.Label(frame_footer, text=f"Console\nlog", bg="#00d0c0")
+log_label.grid(padx=5, row=0, column=4, sticky="e")
 
 console = ScrolledText(frame_footer, font=("Segoe UI", 8), wrap="word", height=3)
 console.grid(row=0, column=5, sticky="w")
 #redirected = Consoleredirect(console)
 #sys.stdout = redirected
+
+free_label = tk.Label(frame_footer, text="Free\ntext", font=("Segoe UI", 8), bg="#00d0c0")
+free_label.grid(padx=5, row=0, column=6, sticky="e")
+
+freetext = ScrolledText(frame_footer, font=("Segoe UI", 8), wrap="word", height=3)
+freetext.grid(row=0, column=7, sticky="w")
+
 #--- end --- Πλαίσιο για το footer ---
 
 '''
