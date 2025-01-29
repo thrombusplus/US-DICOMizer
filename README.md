@@ -1,5 +1,11 @@
 # US-DICOMizer
-US-DICOMizer is an advanced application designed to automate and streamline the preparation of ultrasound diagnostic DICOM files for AI-based workflows. The application incorporates three key functionalities: (1) anonymisation to remove sensitive patient information while preserving essential metadata for AI tasks, (2) cropping to extract relevant regions from images or videos, and (3) tagging to annotate files with critical metadata, such as anatomical position, imaging purpose, and other contextual information. These functionalities aim to address the unique requirements of ultrasound imaging data preparation while ensuring compliance with data privacy regulations and clinical standards.
+US-DICOMizer is an advanced application designed to automate and streamline the preparation of ultrasound diagnostic DICOM files for AI-based workflows. The application incorporates three key functionalities: 
+
+(1) **anonymisation** to remove sensitive patient information while preserving essential metadata for AI tasks, 
+(2) **cropping** to extract relevant regions from images or videos, and 
+(3) **tagging** to annotate files with critical metadata, such as anatomical position, imaging purpose, and other contextual information. 
+
+These functionalities aim to address the unique requirements of ultrasound imaging data preparation while ensuring compliance with data privacy regulations and clinical standards.
 
 ![US-DICOMizer main view](images/US-dicomizer_app_main_window_01.jpg)
 ## Changelog
