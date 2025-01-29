@@ -35,17 +35,17 @@ If you use US-DICOMizer in a scientific publication, we would appreciate using t
 and as BibTeX:
 ```
 @incollection{Pechlivanis_US-DICOMizer_2025,
-    author={Pechlivanis, Dimitrios and Didaskalou, Stylianos and Kaldoudi, Eleni and Drosatos, George},
-    title={Preparing Ultrasound Imaging Data for Artificial Intelligence Tasks: Anonymisation, Cropping, and Tagging},
-    keywords={Ultrasound Imaging;DICOM;Anonymisation;Cropping;Tagging;Artificial Intelligence (AI)},
-    booktitle={Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 5: HEALTHINF},
-    volume={5},
-    year={2025},
-    pages={xxx-xxx},
-    publisher={SciTePress},
-    organization={INSTICC},
-    doi={10.5220/001xxxxxxxxxxxxx},
-    isbn={978-989-758-xxx-x},
-    issn={2184-4305}
+    author       = {Pechlivanis, Dimitrios and Didaskalou, Stylianos and Kaldoudi, Eleni and Drosatos, George},
+    title        = {Preparing Ultrasound Imaging Data for Artificial Intelligence Tasks: Anonymisation, Cropping, and Tagging},
+    keywords     = {Ultrasound Imaging;DICOM;Anonymisation;Cropping;Tagging;Artificial Intelligence (AI)},
+    booktitle    = {Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 5: HEALTHINF},
+    volume       = {5},
+    year         = {2025},
+    pages        = {xxx-xxx},
+    publisher    = {SciTePress},
+    organization = {INSTICC},
+    doi          = {10.5220/001xxxxxxxxxxxxx},
+    isbn         = {978-989-758-xxx-x},
+    issn         = {2184-4305}
 }
 ```
