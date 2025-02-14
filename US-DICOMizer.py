@@ -21,28 +21,11 @@ import time
 from time import strftime
 
 '''
-αν
-[settings]
-user_can_change_compression_level = no
-τότε στο settings παράθυρο το text enty ειναι disabled
-
-προσθήκη του free text
-μικρές αλλαγές στο footer
-
-4.12
-Μίκρυνα τις γραμματισειρές στα treeview
-Χώρισα τα attributes σε metadata και dataset
-Προσθήκη δυνατότητας copy με δεξί κλίκ των τιμών απο το treeview με τα tags
-Προσθήκη options (title) στο filedialog
-απενεργοποίηση της SIMPLETK
-
-Ποια tags θα σβήνω ή ειναι απαραιτητα να υπάρχουν έστω και ώς anonymus
-
-να βαλω tooltip
-να μπει checkbox για edit στα tags
+Ορίζω ως Patient's ID το filename
+δε σβήνω τα X0...Y1 αλλα τα ενημερώνω
 '''
 
-version = "4.13"
+version = "4.14"
 temp_output_dir = None
 zcount = 0
 #app_dir = os.path.join(os.environ['USERPROFILE'],".anonymizer")
@@ -2080,10 +2063,16 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
             sequence_element = ds[0x0018, 0x6011]
             sequence = sequence_element.value
             item = sequence[0]
-            del item[0x0018, 0x6018]
-            del item[0x0018, 0x601a]
-            del item[0x0018, 0x601c]
-            del item[0x0018, 0x601e]
+            #del item[0x0018, 0x6018]
+            #del item[0x0018, 0x601a]
+            #del item[0x0018, 0x601c]
+            #del item[0x0018, 0x601e]
+
+            item[0x0018, 0x6018].value = 0
+            item[0x0018, 0x601a].value = 0
+            item[0x0018, 0x601c].value = crop_width
+            item[0x0018, 0x601e].value = crop_height
+
         except Exception as e:
             console_message(f"sequence_element {e} not found",level="debug")
             
@@ -2099,16 +2088,19 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
                 #print(ds[tag])#τα tags που διεγράφει
                 del ds[tag]
                 
-        patient_s_ID = config['settings'].get('patient_s_ID', 'delete')
-        if patient_s_ID == "delete":
-            del ds[0x0010, 0x0020]
-        else:
-            ds.PatientID = files_folder
+        
         ds.remove_private_tags()
  
         global output_directory2
         #Αποθήκευση του νέου DICOM αρχείου
         output_filename = f"{output_directory}\\{files_folder}_{fileNo:04_}_{tag_value}.dcm"#με το :04 ορίζω 5 ψηφία και γεμίζω μπροστά με 0
+
+        patient_s_ID = config['settings'].get('patient_s_ID', 'delete')
+        if patient_s_ID == "delete":
+            del ds[0x0010, 0x0020]
+        else:
+            ds.PatientID = f"{files_folder}_{fileNo:04_}_{tag_value}"
+        
         ds.save_as(output_filename, enforce_file_format=True)
         #ds.save_as(output_filename, write_like_original=False)
         output_directory2 = output_directory
