@@ -39,14 +39,14 @@ and as BibTeX:
     author       = {Pechlivanis, Dimitrios and Didaskalou, Stylianos and Kaldoudi, Eleni and Drosatos, George},
     title        = {Preparing Ultrasound Imaging Data for Artificial Intelligence Tasks: Anonymisation, Cropping, and Tagging},
     keywords     = {Ultrasound Imaging;DICOM;Anonymisation;Cropping;Tagging;Artificial Intelligence (AI)},
-    booktitle    = {Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 5: HEALTHINF},
-    volume       = {5},
+    booktitle    = {Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 2: HEALTHINF},
+    volume       = {2},
     year         = {2025},
-    pages        = {xxx-xxx},
+    pages        = {951-958},
     publisher    = {SciTePress},
     organization = {INSTICC},
     doi          = {10.5220/001xxxxxxxxxxxxx},
-    isbn         = {978-989-758-xxx-x},
+    isbn         = {978-989-758-731-3},
     issn         = {2184-4305}
 }
 ```
