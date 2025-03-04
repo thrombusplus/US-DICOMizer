@@ -31,7 +31,7 @@ Removed simpleTK and scikit-image modules as they are no longer used
 
 If you use US-DICOMizer in a scientific publication, we would appreciate using the following citation:
 
-* *Pechlivanis, D., Didaskalou, S., Kaldoudi, E. and Drosatos, G. (2025). Preparing Ultrasound Imaging Data for Artificial Intelligence Tasks: Anonymisation, Cropping, and Tagging. In Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 5: HEALTHINF, ISBN 978-989-758-xxx-x, ISSN 2184-4305, pages xxx-xxx. DOI: 10.5220/001xxxxxxxxxxxxx*
+* *Pechlivanis, D., Didaskalou, S., Kaldoudi, E. and Drosatos, G. (2025). Preparing Ultrasound Imaging Data for Artificial Intelligence Tasks: Anonymisation, Cropping, and Tagging. In Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 2: HEALTHINF, ISBN 978-989-758-731-3, ISSN 2184-4305, pages 951-958. DOI: [10.5220/0013379400003911](https://doi.org/10.5220/0013379400003911)*
 
 and as BibTeX:
 ```
@@ -45,7 +45,7 @@ and as BibTeX:
     pages        = {951-958},
     publisher    = {SciTePress},
     organization = {INSTICC},
-    doi          = {10.5220/001xxxxxxxxxxxxx},
+    doi          = {10.5220/0013379400003911},
     isbn         = {978-989-758-731-3},
     issn         = {2184-4305}
 }
