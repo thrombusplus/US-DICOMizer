@@ -258,7 +258,7 @@ def settings():
     settings_window = tk.Toplevel(root)
     settings_window.title("Settings")
     settings_window.iconbitmap(r'icon.ico')
-    settings_window.geometry("450x450")#Πλάχτος x Ύψος
+    settings_window.geometry("450x450")#Πλάτος x Ύψος
 
     try:
         compression_level = config['settings'].get('compression_level', '100')#ανάγνωση τιμής απο το ini αρχείο , εκχόρηση default value
@@ -2227,7 +2227,7 @@ def about():
     about_window = tk.Toplevel(root)
     about_window.title("About")
     about_window.iconbitmap(r'icon.ico')
-    about_window.geometry("260x250")#Πλάχτος x Ύψος
+    about_window.geometry("260x180")#Πλάτος x Ύψος
 
     about_frame = tk.Frame(about_window)# bg="#33A1C9"
     about_frame.grid(row=0, column=0, columnspan=4, sticky="nsew")
@@ -2235,7 +2235,7 @@ def about():
     about_label1 = ttk.Label(about_frame, text="This application was developed by\nPechlivanis Dimitrios", )
     about_label1.grid(padx=5, pady=0, column=0, row=0, sticky="w")
 
-    email_label = tk.Label(about_frame, text="📧 pechlivanis.d@gmail.com",font=("Arial 10"), fg="blue", cursor="hand2" )
+    email_label = tk.Label(about_frame, text="📧 pechlivanis.d@gmail.com",font=("Segoe UI", 10), fg="blue", cursor="hand2" )
     email_label.grid(padx=5, pady=0, column=0, row=1, sticky="w")
     email_label.bind("<Button-1>", lambda e: open_mail())
 
@@ -2243,14 +2243,14 @@ def about():
     about_label2.grid(padx=5, pady=0, column=0, row=2, sticky="w")
     
 
-    link_github = tk.Label(about_frame, text="github.com/thrombusplus/US-DICOMizer\n",font=("Arial 10"), fg="blue", cursor="hand2")
+    link_github = tk.Label(about_frame, text="github.com/thrombusplus/US-DICOMizer\n",font=("Segoe UI", 10), fg="blue", cursor="hand2")
     link_github.grid(padx=5, pady=0, column=0, row=3, sticky="w")
     link_github.bind("<Button-1>", lambda e: open_web_link("https://github.com/thrombusplus/US-DICOMizer"))
 
     about_label3 = ttk.Label(about_frame, text="Is part of the ThrombUS+ project:", )
     about_label3.grid(padx=5, pady=0, column=0, row=4, sticky="w")
 
-    link_thrombus = tk.Label(about_frame, text="thrombus.eu",font=("Arial 10"), fg="blue", cursor="hand2")
+    link_thrombus = tk.Label(about_frame, text="thrombus.eu",font=("Segoe UI", 10), fg="blue", cursor="hand2")
     link_thrombus.grid(padx=5, pady=0, column=0, row=5, sticky="w")
     link_thrombus.bind("<Button-1>", lambda e: open_web_link("https://thrombus.eu/"))
 
@@ -2289,7 +2289,6 @@ def menubar():
     main_menu = Menu(root_menu, tearoff=False)
     root_menu.add_cascade(label="Menu", menu=main_menu)
     main_menu.add_command(label="Settings", command=settings)
-    #main_menu.add_command(label="Infos", command=None)
     main_menu.add_command(label="App manual", command=open_manual)
     main_menu.add_command(label="About", command=about)
     main_menu.add_separator()
