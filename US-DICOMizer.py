@@ -23,6 +23,8 @@ from time import strftime
 '''
 Ορίζω ως Patient's ID το filename
 δε σβήνω τα X0...Y1 αλλα τα ενημερώνω
+Προσθήκη του about window
+αλλαγή της συνάρτησης για το άνοιγμα weblink
 '''
 
 version = "4.14"
@@ -1131,9 +1133,6 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
         web_link_str = config.get("tags_link", "tags_link")
 
-        def open_web_link(web_link_str):
-               webbrowser.open_new_tab(web_link_str)
-               
         select_tag_label = tk.Label(sel_tag_frame,
                                     text="Select tag:", font=("Segoe UI", 8, "underline"),
                                     fg="blue", cursor="hand2")
@@ -2223,7 +2222,47 @@ def open_manual():
     except Exception as e:
         messagebox.showerror("Error", f"Failed to open the file '{filename}': {e}")
         console_message(f"Failed to open the file '{filename}': {e}", level="error")
+
+def about():
+    about_window = tk.Toplevel(root)
+    about_window.title("About")
+    about_window.iconbitmap(r'icon.ico')
+    about_window.geometry("260x250")#Πλάχτος x Ύψος
+
+    about_frame = tk.Frame(about_window)# bg="#33A1C9"
+    about_frame.grid(row=0, column=0, columnspan=4, sticky="nsew")
+
+    about_label1 = ttk.Label(about_frame, text="This application was developed by\nPechlivanis Dimitrios", )
+    about_label1.grid(padx=5, pady=0, column=0, row=0, sticky="w")
+
+    email_label = tk.Label(about_frame, text="📧 pechlivanis.d@gmail.com",font=("Arial 10"), fg="blue", cursor="hand2" )
+    email_label.grid(padx=5, pady=0, column=0, row=1, sticky="w")
+    email_label.bind("<Button-1>", lambda e: open_mail())
+
+    about_label2 = ttk.Label(about_frame, text="\nIs open-source and available on GitHub at:", )
+    about_label2.grid(padx=5, pady=0, column=0, row=2, sticky="w")
     
+
+    link_github = tk.Label(about_frame, text="github.com/thrombusplus/US-DICOMizer\n",font=("Arial 10"), fg="blue", cursor="hand2")
+    link_github.grid(padx=5, pady=0, column=0, row=3, sticky="w")
+    link_github.bind("<Button-1>", lambda e: open_web_link("https://github.com/thrombusplus/US-DICOMizer"))
+
+    about_label3 = ttk.Label(about_frame, text="Is part of the ThrombUS+ project:", )
+    about_label3.grid(padx=5, pady=0, column=0, row=4, sticky="w")
+
+    link_thrombus = tk.Label(about_frame, text="thrombus.eu",font=("Arial 10"), fg="blue", cursor="hand2")
+    link_thrombus.grid(padx=5, pady=0, column=0, row=5, sticky="w")
+    link_thrombus.bind("<Button-1>", lambda e: open_web_link("https://thrombus.eu/"))
+
+def open_web_link(web_link_str):
+    webbrowser.open_new_tab(web_link_str)
+
+def open_mail():
+    email = "pechlivanis.d@gmail.com"
+    mailto_link = f"mailto:{email}"
+    webbrowser.open(mailto_link)
+
+           
 windll.shcore.SetProcessDpiAwareness(0)
 #Δημιουργία του βασικού παραθύρου της εφαρμογής
 root = tk.Tk()
@@ -2252,7 +2291,7 @@ def menubar():
     main_menu.add_command(label="Settings", command=settings)
     #main_menu.add_command(label="Infos", command=None)
     main_menu.add_command(label="App manual", command=open_manual)
-    #main_menu.add_command(label="About Python", command=None)
+    main_menu.add_command(label="About", command=about)
     main_menu.add_separator()
     main_menu.add_command(label="Exit", command=root.quit)
 
