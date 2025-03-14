@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu, font
 from tkinter.messagebox import askyesno
 from tkinter.scrolledtext import ScrolledText
+from tkhtmlview import HTMLLabel 
 
 import os
 import webbrowser
@@ -2225,44 +2226,48 @@ def open_manual():
 
 def about():
     about_window = tk.Toplevel(root)
-    about_window.title("About")
-    about_window.iconbitmap(r'icon.ico')
-    about_window.geometry("260x180")#Πλάτος x Ύψος
-
-    about_frame = tk.Frame(about_window)# bg="#33A1C9"
-    about_frame.grid(row=0, column=0, columnspan=4, sticky="nsew")
-
-    about_label1 = ttk.Label(about_frame, text="This application was developed by\nPechlivanis Dimitrios", )
-    about_label1.grid(padx=5, pady=0, column=0, row=0, sticky="w")
-
-    email_label = tk.Label(about_frame, text="📧 pechlivanis.d@gmail.com",font=("Segoe UI", 10), fg="blue", cursor="hand2" )
-    email_label.grid(padx=5, pady=0, column=0, row=1, sticky="w")
-    email_label.bind("<Button-1>", lambda e: open_mail())
-
-    about_label2 = ttk.Label(about_frame, text="\nIs open-source and available on GitHub at:", )
-    about_label2.grid(padx=5, pady=0, column=0, row=2, sticky="w")
+    about_window.title("About US-DICOMizer")
+    about_window.geometry("390x280") #Πλάτος x Ύψος
+    about_window.resizable(False, False)
     
+    about_frame = tk.Frame(about_window)
+    about_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+    
+    title_label = tk.Label(about_frame, text="US-DICOMizer", font=("Segoe UI", 14, "bold"),
+                           fg="#FFFFFF", bg="#33A1C9", width=14)
+    title_label.grid(row=0, column=0, pady=5, sticky="n")
 
-    link_github = tk.Label(about_frame, text="github.com/thrombusplus/US-DICOMizer\n",font=("Segoe UI", 10), fg="blue", cursor="hand2")
-    link_github.grid(padx=5, pady=0, column=0, row=3, sticky="w")
-    link_github.bind("<Button-1>", lambda e: open_web_link("https://github.com/thrombusplus/US-DICOMizer"))
-
-    about_label3 = ttk.Label(about_frame, text="Is part of the ThrombUS+ project:", )
-    about_label3.grid(padx=5, pady=0, column=0, row=4, sticky="w")
-
-    link_thrombus = tk.Label(about_frame, text="thrombus.eu",font=("Segoe UI", 10), fg="blue", cursor="hand2")
-    link_thrombus.grid(padx=5, pady=0, column=0, row=5, sticky="w")
-    link_thrombus.bind("<Button-1>", lambda e: open_web_link("https://thrombus.eu/"))
+    # HTML Content with links
+    html_content = """
+    <div style='text-align: center; font-family: "Segoe UI", sans-serif;'>
+        <p style='font-size: 11px;'>Version: v4.14
+        <br>Release Date: 14 March 2025
+        <br>Developer: <a href='mailto:pechlivanis.d@gmail.com'>Dimitrios Pechlivanis</a></p>
+        <p style='font-size: 8px;'>The source code of this app is available<br>
+        on <a href='https://github.com/thrombusplus/US-DICOMizer'>GitHub</a> 
+        and has also been<br>
+        published as a <a href='https://doi.org/10.5220/0013379400003911'>scientific paper</a>.</p>
+        <p style='font-size: 8px;'>Part of <a href='https://thrombus.eu/'>ThrombUS+ Project</a>
+        <br>(Grand No. 101137227)</p>
+    </div>
+    """
+    html_label = HTMLLabel(about_frame, html=html_content, width=50, height=100)
+    html_label.grid(row=1, column=0, sticky="n", pady=5)
+    html_label.fit_height()
+    
+    # Load and Display Logo
+    try:
+        image = Image.open("Logo_Blue_Green_small.png")
+        logo = ImageTk.PhotoImage(image)
+        logo_label = tk.Label(about_frame, image=logo)
+        logo_label.image = logo  # Keep a reference
+        logo_label.grid(row=2, column=0, pady=(5,0), sticky="s")
+    except Exception as e:
+        pass
 
 def open_web_link(web_link_str):
     webbrowser.open_new_tab(web_link_str)
 
-def open_mail():
-    email = "pechlivanis.d@gmail.com"
-    mailto_link = f"mailto:{email}"
-    webbrowser.open(mailto_link)
-
-           
 windll.shcore.SetProcessDpiAwareness(0)
 #Δημιουργία του βασικού παραθύρου της εφαρμογής
 root = tk.Tk()
@@ -2566,12 +2571,6 @@ console = ScrolledText(frame_footer, font=("Segoe UI", 8), wrap="word", height=3
 console.grid(row=0, column=5, sticky="w")
 #redirected = Consoleredirect(console)
 #sys.stdout = redirected
-
-free_label = tk.Label(frame_footer, text="Free\ntext", font=("Segoe UI", 8), bg="#00d0c0")
-free_label.grid(padx=5, row=0, column=6, sticky="e")
-
-freetext = ScrolledText(frame_footer, font=("Segoe UI", 8), wrap="word", height=3)
-freetext.grid(row=0, column=7, sticky="w")
 
 #--- end --- Πλαίσιο για το footer ---
 
