@@ -12,8 +12,8 @@ These functionalities aim to address the unique requirements of ultrasound imagi
 ## Changelog
 ### Changes in version 4.14  
 Patient's ID not delete but define as the filename  
-The values for X0, Y0, X1, Y1 not delete but update them
-Add the About window
+The values for X0, Y0, X1, Y1 not delete but update them  
+Add the About window  
 Removed the free text area
 ### Changes in version 4.13  
 If in [settings] section at settings.ini file  
