@@ -8,11 +8,13 @@ US-DICOMizer is an advanced application designed to automate and streamline the 
 These functionalities aim to address the unique requirements of ultrasound imaging data preparation while ensuring compliance with data privacy regulations and clinical standards.
 
 ![US-DICOMizer main view](images/US-dicomizer_app_main_window_01.jpg)
-
+![US-DICOMizer main view 2](images/US-dicomizer_app_main_window_02.jpg)
 ## Changelog
 ### Changes in version 4.14  
 Patient's ID not delete but define as the filename  
 The values for X0, Y0, X1, Y1 not delete but update them  
+Add the About window  
+Removed the free text area
 ### Changes in version 4.13  
 If in [settings] section at settings.ini file  
 user_can_change_compression_level = no  
