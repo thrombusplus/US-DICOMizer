@@ -1991,7 +1991,8 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
 
             #ορισμός του YBR_FULL_422 ανεξαρτήτως αρχικής τιμής YBR_FULL_422 ή RGB καθώς ειναι
             #το default Photometric Interpretation τou JPEG
-            photometric_interpretation = "YBR_FULL_422"
+            
+            photometric_interpretation = "MONOCHROME2" if ds.PhotometricInterpretation == "MONOCHROME2" else "YBR_FULL_422"
             
             #εφαρμογή JPEG συμπίεσης
             jpeg_data_list = []
