@@ -18,6 +18,10 @@ Change title in the 1st header of the treeview to Group,Element
 Bug fix when convert_all_to_jpeg == "yes"  
 New compressed JPEG file save with the rigth Transfer Syntax JPEG Baseline (Process 1)  
 and Photometric Interpretation YBR_FULL_422  
+
+Change the timestamp date - time format  
+from  d-m-y HH:MM:SS 12h format  
+to    y-m-d HH:MM:SS 24h format  
 ### Changes in version 4.14  
 Patient's ID not delete but define as the filename  
 The values for X0, Y0, X1, Y1 not delete but update them  
