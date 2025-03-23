@@ -26,8 +26,12 @@ Bug fix in load_tags()
 Αλλαγή τίτλου στο 1o header του treeview σε Group,Element
 
 Bug fix when convert_all_to_jpeg == "yes"
-New compressed JPEG file save with the right Transfer Syntax JPEG Baseline (Process 1)
+New compressed JPEG file saved with the right Transfer Syntax JPEG Baseline (Process 1)
 and Photometric Interpretation YBR_FULL_422
+
+Change the timestamp date - time format
+from  d-m-y HH:MM:SS 12h format
+to    y-m-d HH:MM:SS 24h format
 '''
 
 version = "4.15"
@@ -151,7 +155,7 @@ def config_logging():
     if not logger.handlers: #για να μήν φορτώνει πολλαπλα handlers κάθε φορά που εκτελείτε
         log_file_path = os.path.join(logs_directory, "{}_dicom_app.log".format(strftime('%Y%m%d')))
         logging.basicConfig(filename=log_file_path, encoding='utf-8', level=logging.DEBUG,
-                            format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%m/%d/%Y %I:%M:%S')
+                            format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y/%m/%d %H:%M:%S')
     return logger
 
 config_logging()
@@ -159,7 +163,7 @@ logger = logging.getLogger('dicom_app')
 logger.info('app started')
 
 def console_message(message, level="info"):
-    timestamp = datetime.now().strftime("%m/%d/%Y %I:%M:%S")
+    timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
     formatted_message = f"{timestamp} - {level.upper()} - {message}"
 
     if level == "error":
