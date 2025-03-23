@@ -10,6 +10,14 @@ These functionalities aim to address the unique requirements of ultrasound imagi
 ![US-DICOMizer main view](images/US-dicomizer_app_main_window_01.jpg)
 ![US-DICOMizer main view 2](images/US-dicomizer_app_main_window_02.jpg)
 ## Changelog
+### Changes in version 4.15
+Bug fix in load_tags()  
+All DICOM attributes load instantly  
+Change title in the 1st header of the treeview to Group,Element  
+
+Bug fix when convert_all_to_jpeg == "yes"  
+New compressed JPEG file save with the rigth Transfer Syntax JPEG Baseline (Process 1)  
+and Photometric Interpretation YBR_FULL_422  
 ### Changes in version 4.14  
 Patient's ID not delete but define as the filename  
 The values for X0, Y0, X1, Y1 not delete but update them  
