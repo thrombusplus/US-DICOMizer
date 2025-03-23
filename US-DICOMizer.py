@@ -26,7 +26,7 @@ Bug fix in load_tags()
 Αλλαγή τίτλου στο 1o header του treeview σε Group,Element
 
 Bug fix when convert_all_to_jpeg == "yes"
-New compressed JPEG file saved with the rigth Transfer Syntax JPEG Baseline (Process 1)
+New compressed JPEG file save with the right Transfer Syntax JPEG Baseline (Process 1)
 and Photometric Interpretation YBR_FULL_422
 '''
 
