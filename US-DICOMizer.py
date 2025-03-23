@@ -2,8 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu, font
 from tkinter.messagebox import askyesno
-from tkinter.scrolledtext import ScrolledText
-from tkhtmlview import HTMLLabel 
+from tkinter.scrolledtext import ScrolledText 
 
 import os
 import webbrowser
@@ -22,13 +21,16 @@ import time
 from time import strftime
 
 '''
-Ορίζω ως Patient's ID το filename
-δε σβήνω τα X0...Y1 αλλα τα ενημερώνω
-Προσθήκη του about window
-αλλαγή της συνάρτησης για το άνοιγμα weblink
+Bug fix in load_tags()
+Πλέον οι εγγραφές φορτώνουν άμεσα
+Αλλαγή τίτλου στο 1o header του treeview σε Group,Element
+
+Bug fix when convert_all_to_jpeg == "yes"
+New compressed JPEG file saved with the rigth Transfer Syntax JPEG Baseline (Process 1)
+and Photometric Interpretation YBR_FULL_422
 '''
 
-version = "4.14"
+version = "4.15"
 temp_output_dir = None
 zcount = 0
 #app_dir = os.path.join(os.environ['USERPROFILE'],".anonymizer")
@@ -112,7 +114,7 @@ Unknown Time = 200D,2638
 tag_values = ("none","CFVr-L", "CFV-L", "CFVr-R", "CFV-R","GSVr-L", "GSV-L", "GSVr-R", "GSV-R","FVr-L", "FV-L", "FVr-R", "FV-R","FV-Dr-L", "FV-D-L", "FV-Dr-R", "FV-D-R","PVr-L", "PV-L", "PVr-R", "PV-R","OPT-L", "OPT-R")
 
 [tags_link]
-tags_link = bmi.med.duth.gr
+tags_link = https://app.thrombus.eu/studies/a
 
 [devices]
 device0 = [20093],[330,58,890,817],[195,58,1020,733]
@@ -124,6 +126,7 @@ device5 = [EPIQ 7G_2.0.3.398],[357,69,644,560],[278,50,519,560]
 device6 = [EPIQ 7G_2.0.1.256],[278,50,519,560],[278,50,519,560]    
 device7 = [379046942],[207,52,519,560],[207,52,592,569]
 device8 = [LOGIQS7XDclear2.0:R4.2.56],[432,46,1009,827],[432,46,1009,827]
+device9 = [LS7X00381],[330,109,735,805],[330,109,735,805]
 """)
         
         messagebox.showinfo("Settings file", "File settings.ini created with default values.")
@@ -179,7 +182,7 @@ except Exception as e:
     messagebox.showerror("Read settings.ini", f"{e}.")
         
 
-'''
+
 #------------- INITIALIZE -------------
 #ελέγχω ότι είναι εγκατεστημένες οι απαραίτητες βιβλιοθήκες
 def check_and_install(package_name):
@@ -198,16 +201,18 @@ def check_and_install(package_name):
         else:
             messagebox.showinfo("Package Installation", f"Skipping installation of {package_name}.")
 
+'''
 def check_required_packages():
     #root.withdraw()
     required_packages = {
         "pydicom": "pydicom",
         "SimpleITK": "SimpleITK",
         "PIL": "PIL",
+        "tkhtmlview": "tkhtmlview",
         
         "numpy": "numpy",
         "matplotlib": "matplotlib",
-        "--pre scikit-image": "--pre scikit-image"
+        #"--pre scikit-image": "--pre scikit-image"
     }
     
     for module, package in required_packages.items():
@@ -220,18 +225,16 @@ try:
     #import libraries
     import zipfile
     import pydicom
-    #from pydicom.pixels.processing import convert_color_space
     from pydicom.pixels.utils import get_nr_frames, pixel_array
     from pydicom.encaps import encapsulate, get_frame
     from pydicom.uid import UID
     from pydicom.dataelem import DataElement
     import uuid
-    #import SimpleITK as sitk
     from PIL import Image, ImageTk, ImageDraw
     import numpy as np
     import matplotlib.pyplot as plt
-    #from skimage import io
     import io
+    from tkhtmlview import HTMLLabel
     
 except Exception as e:
     messagebox.showerror("Error", f"An error occurred: {str(e)}")
@@ -244,6 +247,7 @@ pip install pydicom
 pip install Pillow
 pip install numpy
 pip install matplotlib
+pip install tkhtmlview
 
 maybe
 pip install --upgrade scipy
@@ -983,7 +987,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     ds = pydicom.dcmread(file_path) #ανάγνωση του αρχείου DICOM
     num_frames = get_nr_frames(ds)
 
-    if 'PixelData' in ds:
+    if 'PixelData' in ds:#αν το dicom έχει εικόνα διαβάζω τις διαστάσεις απο τα tags που υπάρχουν
         columnsNo = ds[0x0028,0x0011].value
         rowsNo = ds[0x0028,0x0010].value
     else:
@@ -1034,9 +1038,9 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             #print(f"x: {event.x_root}, y: {event.y_root}")
     
     # Δημιουργία του treeview
-    tags_treeview = ttk.Treeview(tags_tree_frame, columns=("Tag", "Name", "Value"),
+    tags_treeview = ttk.Treeview(tags_tree_frame, columns=("Group,Element", "Name", "Value"),
                                  show="headings", selectmode="browse", height=34)                               
-    tags_treeview.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+    tags_treeview.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
     
     #κατασκευή των scrollbars
     tags_tree_v_scrollbar = tk.Scrollbar(tags_tree_frame, orient="vertical",
@@ -1050,51 +1054,42 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     tags_treeview.configure(xscrollcommand=tags_tree_h_scrollbar.set)
     
     #στήλες και των επικεφαλίδες του treeview
-    tags_treeview.heading("Tag", text="Tag")
-    tags_treeview.column("Tag", width=65, anchor='center', stretch=False)#Μικρότερο πλάτος για το tag
+    tags_treeview.heading("Group,Element", text="Group,Element")
+    tags_treeview.column("Group,Element", width=85, anchor='center', stretch=False)
 
     tags_treeview.heading("Name", text="Name")
-    tags_treeview.column("Name", width=200, anchor='w', stretch=False)#Σταθερό πλάτος για το name
+    tags_treeview.column("Name", width=180, anchor='w', stretch=False)#Σταθερό πλάτος για το name
 
     tags_treeview.heading("Value", text="Value", anchor='w')
     tags_treeview.column("Value", width=350, anchor='w', stretch=False)#Μεγαλύτερο πλάτος για ενεργοποίηση του οριζόντιου scrollbar
     tags_treeview.bind("<Button-3>", on_right_click)
-    
+
     def load_tags():
     #προσθήκη των tags από τα metadata στο treeview
         console_message("start to read all elements from the DICOM file",level="debug")
-    
+        tree_data = []
         #print("---- METADATA ----")
         if hasattr( ds, 'file_meta'):
-            tag=""
-            value=""
-            name = "MetaData"
-            tags_treeview.insert("", "end", values=(tag, name, value))
+            tree_data.append(("", "Metadata", ""))
             for elem in ds.file_meta:
                 tag = elem.tag
                 name = elem.name
-                keyword = elem.keyword
                 value = str(elem.value)[:200] + "..." if len(str(elem.value)) > 200 else str(elem.value)
-                
-                #print(keyword,value)
-                #print(elem)
                     
                 if elem.VR == "UI":  #για να φέρω τις περιργαφες πχ JPEG basilene 1
                     uid_description = UID(value).name if UID(value).is_valid else "Unknown UID"
                     if uid_description != value:
                         value = f"{value} ({uid_description})"  #προσθήκη της περιγραφής στην τιμή, αν διαφέρει με το value
-                tags_treeview.insert("", "end", values=(tag, name, value))
+                tree_data.append((tag, name, value))
 
-        tag=""
-        value=""
-        name = "DataSet"
-        tags_treeview.insert("", "end", values=(tag, name, value))            
+        tree_data.append(("", "DataSet", ""))
+        
         for elem in ds.iterall():
             tag = elem.tag
             #print(tag)
             #print(type(tag)) # <class 'pydicom.tag.BaseTag'>
             name = elem.name
-            keyword = elem.keyword
+            #keyword = elem.keyword
             value = str(elem.value)[:200] + "..." if len(str(elem.value)) > 200 else str(elem.value)  #περικοπή μεγάλων strings
             if elem.VR == "UI":  #για να φέρω τις περιργαφες πχ JPEG basilene 1
                 #print(keyword,value)
@@ -1102,11 +1097,21 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 uid_description = UID(value).name if UID(value).is_valid else "Unknown UID"
                 if uid_description != value:
                     value = f"{value} ({uid_description})"
+
             if elem.VR == "SQ":
                     value = "---- Sequence ----"
-            tags_treeview.insert("", "end", values=(tag, name, value))
+                    
+            tree_data.append((tag, name, value))
+            
+        root.after(0, lambda: update_treeview(tree_data))
+        
         console_message("Done, all elements from the DICOM file has readed",level="debug")
-    
+
+    def update_treeview(tree_data):
+        tags_treeview.delete(*tags_treeview.get_children())  # Καθαρισμός παλιών δεδομένων
+        for row in tree_data:
+            tags_treeview.insert("", "end", values=row)
+        
     load_tags_thread = Thread(target=load_tags).start()
     
     # --------- Frame με την εικόνα ---------
@@ -1972,8 +1977,6 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
         if convert_all_to_jpeg == "yes":
             #print("will convert_all_to_jpeg")
 
-            #εφαρμόζει συμπίεση jpeg
-            jpeg_data_list = []
             if user_can_change_compression_level == "yes":
                 quality_value = compression_level
             else:
@@ -1981,10 +1984,17 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
 
             console_message(f"start crop image for fileNo: {fileNo}",level="debug")
             #print("quality_value: ",quality_value)
+
+            #ορισμός του YBR_FULL_422 ανεξαρτήτως αρχικής τιμής YBR_FULL_422 ή RGB καθώς ειναι
+            #το default Photometric Interpretation τou JPEG
+            photometric_interpretation = "YBR_FULL_422"
+            
+            #εφαρμογή JPEG συμπίεσης
+            jpeg_data_list = []
             for cropped_frame in cropped_frames:
                 image = Image.fromarray(cropped_frame)
                 buffer = io.BytesIO()
-                image.save(buffer, format="JPEG", quality=int(quality_value), subsampling=0, optimize=True)
+                image.save(buffer, format="JPEG", quality=int(quality_value), subsampling=1, optimize=True)
                 jpeg_data_list.append(buffer.getvalue())
             
             ds.PixelData = encapsulate(jpeg_data_list)
@@ -1993,6 +2003,7 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
             
             #εφαρμογή σωστών τιμών στα tags
             ds.file_meta.TransferSyntaxUID = UID("1.2.840.10008.1.2.4.50") #εφαρμογή του Transfer Syntax UID  JPEG Baseline 1
+            ds.PhotometricInterpretation = photometric_interpretation
             ds[0x0028, 0x2110] = DataElement(0x00282110, 'CS', "01")           #Lossy Image Compression 0 όχι / 1 ναί
             ds[0x0028, 0x2114] = DataElement(0x00282114, 'LO', "ISO_10918_1")  #Lossy Image Compression Method
             #ds[0x0028, 0x2112] = DataElement(0x00282112, 'DS', "5")            #για συμπίεση 85
@@ -2057,7 +2068,6 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
         new_SeriesInstanceUID = pydicom.uid.generate_uid()
         ds.SeriesInstanceUID = new_SeriesInstanceUID
 
-        #ds.remove_private_tags()
         try:
             #διαγραφή περιττών tags X0, Y0, X1, Y1
             sequence_element = ds[0x0018, 0x6011]
@@ -2240,8 +2250,8 @@ def about():
     # HTML Content with links
     html_content = """
     <div style='text-align: center; font-family: "Segoe UI", sans-serif;'>
-        <p style='font-size: 11px;'>Version: v4.14
-        <br>Release Date: 14 March 2025
+        <p style='font-size: 11px;'>Version: v4.15
+        <br>Release Date: 23 March 2025
         <br>Developer: <a href='mailto:pechlivanis.d@gmail.com'>Dimitrios Pechlivanis</a></p>
         <p style='font-size: 8px;'>The source code of this app is available<br>
         on <a href='https://github.com/thrombusplus/US-DICOMizer'>GitHub</a> 
