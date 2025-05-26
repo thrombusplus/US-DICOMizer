@@ -21,20 +21,11 @@ import time
 from time import strftime
 
 '''
-Bug fix in load_tags()
-Πλέον οι εγγραφές φορτώνουν άμεσα
-Αλλαγή τίτλου στο 1o header του treeview σε Group,Element
-
-Bug fix when convert_all_to_jpeg == "yes"
-New compressed JPEG file saved with the right Transfer Syntax JPEG Baseline (Process 1)
-and Photometric Interpretation YBR_FULL_422
-
-Change the timestamp date - time format
-from  d-m-y HH:MM:SS 12h format
-to    y-m-d HH:MM:SS 24h format
+added auto bounding for cropping
+minor changes at logs output
 '''
 
-version = "4.15"
+version = "4.16"
 temp_output_dir = None
 zcount = 0
 #app_dir = os.path.join(os.environ['USERPROFILE'],".anonymizer")
@@ -83,34 +74,72 @@ Study Time = 0008,0030
 Series Time = 0008,0031
 Acquisition Time = 0008,0032
 Content Time = 0008,0033
+Accession Number = 0008,0050
 Institurion Name = 0008,0080
+Institution Address = 0008,0081
 Referring Physician's Name = 0008,0090
 Consulting Physician Name = 0008,0090C
+Timezone offset from utc = 0008,0201
 Station Name = 0008,1010
 Study Description = 0008,1030
+Series Description = 0008,103E
 Institutional Deparment Name = 0008,1040
 Physician(s) of Record = 0008,1048
+Performing Physician's Name2 = 0008,1050
+Name of Physicians Reading Study = 0008,1060
 Performing Physician's Name = 0008,1070
+Admitting Diagnoses Description = 0008,1080
 Referenced performed procedure step = 0008,1111
 Referenced sop class uid = 0008,1150
 Referenced sop instance uid = 0008,1155
 Patient's Name = 0010,0010
+Issuer of Patient id = 0010,0021
 Patient's Birth Date = 0010,0030
 Patient's Birth Time = 0010,0032
 Patient Birth Date In Alternative Calendar = 0010,0033
 Patient's sex = 0010,0040
-Patient comments = 0010,4000
+Other Patient ids = 0010,1000
+Other Patient Names = 0010,1001
+Patient's Nirth Name = 0010,1005
+Patient's Age = 0010,1010
+Patient's Size = 0010,1020
+Patient's Weight = 0010,1030
+Patient's Address = 0010,1040
+Patient's Mother's Birth Name = 0010,1060
+Military Rank = 0010,1080
+branch of Service = 0010,1081
+Medical Record Locator = 0010,1090
+Medical Alerts = 0010,2000
+Allergies = 0010,2110
+Country of Residence = 0010,2150
+Tegion of Residence = 0010,2152
+Patient's Relephone Numbers = 0010,2154
+Ethnic Group = 0010,2160
+Occupation = 0010,2180
+Smoking Status = 0010,21A0
+Sdditional Patient History = 0010,21B0
+Last menstrual date = 0010,21D0
+Patient's Religious Preference = 0010,21F0
+Patient Comments = 0010,4000
+Body Part Examined = 0018,0015
 Device Serial Number = 0018,1000
-;Software Versions = 0018,1020
 Protocol Name = 0018,1030
 Study ID = 0020,0010
+Patient Orientation = 0020,0020
 Lossy Image Compression Ratio = 0028,2112
+Scheduled Study Start Date = 0032,1000
+Scheduled Study start Time = 0032,1001
+Requesting Physician = 0032,1032
+Requesting Service = 0032,1033
 Study Comments = 0032,4000
+Special Needs = 0038,0050
+Patient State = 0038,0500
 Performed Procedure Step Start Date = 0040,0244
 Performed Procedure Step Start Time = 0040,0245
 Performed Procedure Step ID = 0040,0253
 Performed Procedure Step Description = 0040,0254
 Comments on the Performed Procedure Step = 0040,0280
+Confidentiality Constraint on Patient Data Description = 0040,3001
 Unknown Date = 200D,2637
 Unknown Time = 200D,2638
 
@@ -121,16 +150,9 @@ tag_values = ("none","CFVr-L", "CFV-L", "CFVr-R", "CFV-R","GSVr-L", "GSV-L", "GS
 tags_link = https://app.thrombus.eu/studies/a
 
 [devices]
-device0 = [20093],[330,58,890,817],[195,58,1020,733]
-device1 = [292a20205232012773],[252,51,686,720],[252,51,686,720]
-device2 = [441366981],[52,90,970,726],[38,55,760,566]
-device3 = [LS7X00334],[290,120,840,895],[290,120,840,895]
-device4 = [370002158],[133,76,720,593],[133,76,720,593]
-device5 = [EPIQ 7G_2.0.3.398],[357,69,644,560],[278,50,519,560]
-device6 = [EPIQ 7G_2.0.1.256],[278,50,519,560],[278,50,519,560]    
-device7 = [379046942],[207,52,519,560],[207,52,592,569]
-device8 = [LOGIQS7XDclear2.0:R4.2.56],[432,46,1009,827],[432,46,1009,827]
-device9 = [LS7X00381],[330,109,735,805],[330,109,735,805]
+device0 = [379046942],[337,69,686,727],[263,53,536,569]
+device1 = [323075254],[260,130,835,735],[200,100,650,575]
+
 """)
         
         messagebox.showinfo("Settings file", "File settings.ini created with default values.")
@@ -235,6 +257,7 @@ try:
     from pydicom.dataelem import DataElement
     import uuid
     from PIL import Image, ImageTk, ImageDraw
+    import cv2 as cv
     import numpy as np
     import matplotlib.pyplot as plt
     import io
@@ -976,7 +999,7 @@ def move_down():
 #αρχικοποίηση μεταβλητής
 tree_flag = 0
     
-#Συνάρτηση όπου ανοίγει το αρχείο DICOM και διαβάζει τα tags και την εικόνα
+#Συνάρτηση όπου ανοίγει το αρχείο DICOM και διαβάζει τα tags και την εικόνα, κάνει και αυτόματη ανίχνευση
 def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     global tree_flag, tags_tree_frame, preview_frame, info_frame, ds, img_label, video_slider, current_frame_index, crop_values_apply_btn # Χρήση των global μεταβλητών
     #loading_popup = popup_message("Preview", "loading...\nPlease wait.")#, delay=2000
@@ -1237,27 +1260,96 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             
             else:
                 crop_identifier_status = 0
-                #αν το SN δεν υπάρχει στο INI, skip και εμφανίζει μήνυμα
-                console_message(f"SN {device_sn} not found in ini, file skipped", level="warning")
-                messagebox.showerror("Read crop area", f"crop identifier {crop_identifier} not found in ini.\nAdd the device SN and crop areas to settings file.\nOr apply manual crop.")
-                #crop_x0, crop_y0, crop_x1, crop_y1 = [0, 0, columnsNo, rowsNo]
-                #selected_crop = [0, 0, columnsNo, rowsNo]
+                ##αν το SN δεν υπάρχει στο INI, skip και εμφανίζει μήνυμα
+                console_message(f"SN {device_sn} not found in ini.", level="warning")
+                #messagebox.showwarning("Read crop area", f"Crop identifier {crop_identifier} not found in ini.\nAutomatic cropping will be applied.\nAdd the device ID and crop areas to settings file\nor apply manual crop.")
+                ##crop_x0, crop_y0, crop_x1, crop_y1 = [0, 0, columnsNo, rowsNo]
+                ##selected_crop = [0, 0, columnsNo, rowsNo]
 
-                try:
+                try:                    
+                    #δοκιμάζει auto crop παίρνοντας τις τιμές απο τα tags και εφαρμόζει ένα πιο σφιχτό cropping
                     sequence_element = ds[0x0018, 0x6011]
                     sequence = sequence_element.value
                     item = sequence[0]
-                    #print(item[0x0018, 0x6018].value)
-                    #print("item 00018,6018:",type(item[0x0018, 0x6018].value))
-
+                
                     crop_x0 = item[0x0018, 0x6018].value
                     crop_y0 = item[0x0018, 0x601a].value
                     crop_x1 = item[0x0018, 0x601c].value
                     crop_y1 = item[0x0018, 0x601e].value
+                    
+                    fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
+                    img = pixel_array(ds, index=fr_index)[crop_y0:crop_y1, crop_x0:crop_x1]
+                    
+                    if len(img.shape) > 2:
+                        grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+                    else:
+                        grayscale = img
+
+                    # Threshold the image
+                    _, thresholded = cv.threshold(grayscale, 1, 255, 0)  # Hack put '1, 255, 0' and not '0, 255, 0' for FR1
+
+                    # Find contours
+                    contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+                    
+                    areas = [cv.contourArea(c) for c in contours]
+                    max_index = np.argmax(areas)
+                    cnt=contours[max_index]
+                    x,y,w,h = cv.boundingRect(cnt)
+                    
+                    crop_x0, crop_y0, crop_x1, crop_y1 = [crop_x0+x, crop_y0+y, crop_x0+x+w, crop_y0+y+h]
+                    
                 except:
-                    crop_x0, crop_y0, crop_x1, crop_y1 = [0, 0, columnsNo, rowsNo]
+                    #αν δεν υπάρχουν οι τιμές X0,X1,Y0,Y1 στα tags εφαρμόζει auto crop απο όλη την εικόνα
+                    fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
+
+                    img = pixel_array(ds, index=fr_index)
+
+                    if len(img.shape) > 2:
+                        grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+                    else:
+                        grayscale = img
+
+                    # Threshold the image
+                    _, thresholded = cv.threshold(grayscale, 1, 255, 0)  # Hack put '1, 255, 0' and not '0, 255, 0' for FR1
+
+                    # Find contours
+                    contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+                    
+                    # Get image center
+                    image_center = np.array([img.shape[1] / 2, img.shape[0] / 2])
+
+                    # Compute areas and sort contours by area descending
+                    areas = [cv.contourArea(c) for c in contours]
+                    sorted_indices = np.argsort(areas)[::-1]  # descending order
+
+                    # Take top 3 contours (this could be 1 in case that the image already cropped using the predifined default area per US device)
+                    top_indices = sorted_indices[:3]
+                    top_contours = [contours[i] for i in top_indices]
+
+                    # Find contour among top 3 closest to center
+                    min_distance = float('inf')
+                    closest_cnt = None
+
+                    for cnt in top_contours:
+                        M = cv.moments(cnt)
+                        if M["m00"] != 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
+                            center = np.array([cx, cy])
+                            distance = np.linalg.norm(center - image_center)
+                            if distance < min_distance:
+                                min_distance = distance
+                                closest_cnt = cnt
+
+                    # Get bounding box and crop
+                    if closest_cnt is not None:
+                        x, y, w, h = cv.boundingRect(closest_cnt)
+                        crop_x0, crop_y0, crop_x1, crop_y1 = [x, y, x+w, y+h]
+                    else:
+                        crop_x0, crop_y0, crop_x1, crop_y1 = [0, 0, columnsNo, rowsNo]
 
                 selected_crop = crop_x0, crop_y0, crop_x1, crop_y1
+                console_message(f"Autocrop applied for ID: {crop_identifier}, Crop area: {selected_crop}", level="info")
 
         except Exception as e:
             crop_identifier_status = 0
@@ -1266,14 +1358,42 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             messagebox.showerror("Read crop area", f"Error while reading crop data for identifier  {crop_identifier}: {str(e)}.\nCheck settings file or apply manual crop.")
             #crop_x_start, crop_y_start, crop_x_end, crop_y_end = [0, 0, columnsNo, rowsNo]#αναθέλω τιμές για όλη την εικόνα
 
-            #αναθέλω τιμές για την περιοχή βάση των tag που υπάρχουν
+            #στη συνέχεια
+            #αναθέτω τιμές για την περιοχή βάση των tag που υπάρχουν
             crop_x0 = item[0x0018, 0x6018].value
             crop_y0 = item[0x0018, 0x601a].value
             crop_x1 = item[0x0018, 0x601c].value
             crop_y1 = item[0x0018, 0x601e].value
+            
+            #num_fr = get_nr_frames(ds)
+            #fr_index = 0
+            #if num_fr > 1:
+                #fr_index = random.randint(0, num_fr)
+            fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
+                    
+            img = pixel_array(ds, index=fr_index)[crop_y0:crop_y1, crop_x0:crop_x1]
+            
+            if len(img.shape) > 2:
+                grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+            else:
+                grayscale = img
+
+            # Threshold the image
+            _, thresholded = cv.threshold(grayscale, 1, 255, 0)  # Hack put '1, 255, 0' and not '0, 255, 0' for FR1
+
+            # Find contours
+            contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+                    
+            areas = [cv.contourArea(c) for c in contours]
+            max_index = np.argmax(areas)
+            cnt=contours[max_index]
+            x,y,w,h = cv.boundingRect(cnt)
+                    
+            crop_x0, crop_y0, crop_x1, crop_y1 = [crop_x0+x, crop_y0+y, crop_x0+x+w, crop_y0+y+h]
+            
             selected_crop = crop_x0, crop_y0, crop_x1, crop_y1
 
-        #διαβάζω τις τιμές x0,x1,y0,y1
+        #διαβάζω τις τιμές x0,x1,y0,y1 απο το treeview
         current_values = treeview.item(selected_item, "values")
         
         if all(int(value) == 0 for value in current_values[3:7]):
@@ -1354,14 +1474,6 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             x1 = crop_values["x1"].get()
             y1 = crop_values["y1"].get()
             
-
-            '''
-            print("crop value x0: ", x0)
-            print("crop value y0: ", y0)
-            print("crop value x1: ", x1)
-            print("crop value y1: ", y1)
-            '''
-                
             #print("treeview: ", treeview)
             #print("selected item", selected_item)
 # ************** ΕΔΩ ισως πρεπει να βαλω else ************
@@ -1499,7 +1611,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 
         
         crop_values_apply_btn = ttk.Button(crop_info_frame, text="Apply", style="apply.TButton",
-                                           command= lambda: apply_crop_values(treeview, selected_item, crop_values, highlightNo, var_apply, is_multiframe))
+                                           command = lambda: apply_crop_values(treeview, selected_item, crop_values, highlightNo, var_apply, is_multiframe))
         crop_values_apply_btn.grid(row=0, column=4, padx=3, sticky="w")
 
         var_apply = tk.IntVar()
@@ -1507,8 +1619,101 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         apply_to_all_cb.grid(row=0, column=5, padx=0, sticky="w")
 
         crop_values_add_btn = ttk.Button(crop_info_frame, text="+ to settings", style="small.TButton",
-                                           command= lambda: add_to_devices(crop_values, crop_identifier))
+                                           command = lambda: add_to_devices(crop_values, crop_identifier))
         crop_values_add_btn.grid(row=1, column=4, padx=3, sticky="w")
+
+        def trigger_auto_crop(ds):
+            try:
+                sequence_element = ds[0x0018, 0x6011]
+                sequence = sequence_element.value
+                item = sequence[0]
+                
+                crop_x0 = item[0x0018, 0x6018].value
+                crop_y0 = item[0x0018, 0x601a].value
+                crop_x1 = item[0x0018, 0x601c].value
+                crop_y1 = item[0x0018, 0x601e].value
+
+                fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
+                img = pixel_array(ds, index=fr_index)[crop_y0:crop_y1, crop_x0:crop_x1]
+                    
+                if len(img.shape) > 2:
+                    grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+                else:
+                    grayscale = img
+
+                # Threshold the image
+                _, thresholded = cv.threshold(grayscale, 1, 255, 0)  # Hack put '1, 255, 0' and not '0, 255, 0' for FR1
+
+                # Find contours
+                contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+                
+                areas = [cv.contourArea(c) for c in contours]
+                max_index = np.argmax(areas)
+                cnt=contours[max_index]
+                x,y,w,h = cv.boundingRect(cnt)
+                    
+                crop_x0, crop_y0, crop_x1, crop_y1 = [crop_x0+x, crop_y0+y, crop_x0+x+w, crop_y0+y+h]
+
+            except:
+                fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
+                img = pixel_array(ds, index=fr_index)
+                #crop_x0, crop_y0, crop_x1, crop_y1 = 0, 0, columnsNo, rowsNo
+
+                if len(img.shape) > 2:
+                    grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+                else:
+                    grayscale = img
+
+                _, thresholded = cv.threshold(grayscale, 1, 255, 0)
+                contours, _ = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+
+                if len(contours) == 0:
+                    x, y, w, h = 0, 0, columnsNo, rowsNo
+                else:
+                    areas = [cv.contourArea(c) for c in contours]
+                    sorted_indices = np.argsort(areas)[::-1]
+                    top_contours = [contours[i] for i in sorted_indices[:3]]
+
+                    image_center = np.array([img.shape[1] / 2, img.shape[0] / 2])
+                    min_distance = float('inf')
+                    closest_cnt = None
+
+                    for cnt in top_contours:
+                        M = cv.moments(cnt)
+                        if M["m00"] != 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
+                            center = np.array([cx, cy])
+                            dist = np.linalg.norm(center - image_center)
+                            if dist < min_distance:
+                                min_distance = dist
+                                closest_cnt = cnt
+
+                    if closest_cnt is not None:
+                        x, y, w, h = cv.boundingRect(closest_cnt)
+                    else:
+                        x, y, w, h = 0, 0, columnsNo, rowsNo
+
+            crop_x_start_var.set(crop_x0)
+            crop_y_start_var.set(crop_y0)
+            crop_x_end_var.set(crop_x1)
+            crop_y_end_var.set(crop_y1)
+
+            update_image_with_crop_area(
+                frame_index=current_frame_index,
+                crop_x_start=crop_x0,
+                crop_y_start=crop_y0,
+                crop_x_end=crop_x1,
+                crop_y_end=crop_y1,
+                applied_value=0
+            )
+
+            console_message("Auto-crop manually triggered.", level="info")
+            
+        auto_btn = ttk.Button(crop_info_frame, text="Auto", style="small.TButton", width=6,
+                                           command = lambda: trigger_auto_crop(ds))
+        auto_btn.grid(row=1, column=5, padx=3, sticky="w")
+        
         #print(crop_identifier_status)
         if crop_identifier_status == 0:
             crop_values_add_btn["state"] = "normal"
@@ -2255,8 +2460,8 @@ def about():
     # HTML Content with links
     html_content = """
     <div style='text-align: center; font-family: "Segoe UI", sans-serif;'>
-        <p style='font-size: 11px;'>Version: v4.15
-        <br>Release Date: 23 March 2025
+        <p style='font-size: 11px;'>Version: v4.16
+        <br>Release Date: 07 May 2025
         <br>Developer: <a href='mailto:pechlivanis.d@gmail.com'>Dimitrios Pechlivanis</a></p>
         <p style='font-size: 8px;'>The source code of this app is available<br>
         on <a href='https://github.com/thrombusplus/US-DICOMizer'>GitHub</a> 
