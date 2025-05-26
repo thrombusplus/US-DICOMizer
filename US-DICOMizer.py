@@ -2461,7 +2461,7 @@ def about():
     html_content = """
     <div style='text-align: center; font-family: "Segoe UI", sans-serif;'>
         <p style='font-size: 11px;'>Version: v4.16
-        <br>Release Date: 07 May 2025
+        <br>Release Date: 27 May 2025
         <br>Developer: <a href='mailto:pechlivanis.d@gmail.com'>Dimitrios Pechlivanis</a></p>
         <p style='font-size: 8px;'>The source code of this app is available<br>
         on <a href='https://github.com/thrombusplus/US-DICOMizer'>GitHub</a> 
