@@ -10,6 +10,10 @@ These functionalities aim to address the unique requirements of ultrasound imagi
 ![US-DICOMizer main view](images/US-dicomizer_app_main_window_01.jpg)
 ![US-DICOMizer main view 2](images/US-dicomizer_app_main_window_02.jpg)
 ## Changelog
+### Changes in version 4.16
+Added auto detection for cropping  
+Minor changes at logs output  
+
 ### Changes in version 4.15
 Bug fix in load_tags()  
 All DICOM attributes load instantly  
