@@ -2237,7 +2237,7 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
                 cropped_frames_array = np.array(cropped_frames)
                 ds.PixelData = cropped_frames_array.tobytes()#μετατροπή του πίνακα σε bytes
                 ds.file_meta.TransferSyntaxUID = ds.file_meta.TransferSyntaxUID
-                if ds.PhotometricInterpretation == "MONOCROME2":
+                if ds.PhotometricInterpretation == "MONOCHROME2":
                     pass
                 else:
                     ds.PhotometricInterpretation = "RGB"
