@@ -1494,6 +1494,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     preview_frame = tk.Frame(frame_2, height=30)
     preview_frame.grid(padx=0, pady=0, row=0, column=0, sticky="nsew")
     preview_frame.grid_columnconfigure(0, weight=1)
+    preview_frame.grid_rowconfigure(0, weight=1)
 
     # με 2Πλό κλίκ επάνω στην εικόνα την κάνω Plot
     preview_frame.bind('<Double-Button-1>', lambda: plot_image(pixel_array(ds, index=current_frame_index), source_stage))
@@ -2666,28 +2667,16 @@ def update_image_with_crop_area(frame_index, crop_x_start, crop_y_start, crop_x_
         draw.line((center_x - X_size, center_y + X_size, center_x + X_size, center_y - X_size), fill="red", width=5)
         crop_values_apply_btn.config(state="disabled")
         #messagebox.showerror("Crop area error", f"{e}")
-    max_width = 351
-    max_height = 271
-    
-    #υπολογιζω το aspect ratio - αναλογία λαμβάνω απ ευθείας τις τιμές heigth-1 / width-0
-    image_aspect_ratio = img.size[1] / img.size[0]
-    #print("img.size[0]: ", img.size[0])
-    if img.size[0] > max_width:#πέρνω απ ευθείας το πλάτος
-        new_width = max_width
-        new_height = int(new_width * image_aspect_ratio)#πρέπει να είναι ακαίρεος
-        image = img.resize((new_width, new_height))#προσφέρει καλύτερη εικόνα , Image.ANTIALIAS remove at PIL 10 / use , Image.LANCZOS (δεν ειδα διαφορά
-    #print("test start")
-        
-    #Εάν το ύψος είναι μεγαλύτερο από το μέγιστο επιτρεπόμενο ύψος
-    #print("img.size[1]: ", img.size[1])
-    if img.size[1] > max_height:#πέρνω απ ευθείας το ύψος
-        new_height = max_height
-        new_width = int(new_height / image_aspect_ratio)
-        
-        #resize με βάση το ύψος
-        image = img.resize((new_width, new_height), Image.LANCZOS)
-    else: 
-        image = img
+    _pfw = preview_frame.winfo_width()
+    _pfh = preview_frame.winfo_height()
+    max_width  = max(_pfw - 4,  351) if _pfw > 10 else 351
+    max_height = max(_pfh - 4,  271) if _pfh > 10 else 271
+
+    # Scale to fit — works both up (enlarge) and down (shrink)
+    scale = min(max_width / orig_width, max_height / orig_height)
+    new_width  = max(1, int(orig_width  * scale))
+    new_height = max(1, int(orig_height * scale))
+    image = img.resize((new_width, new_height), Image.LANCZOS)
 
     # Calculate scale factors for annotation coordinate mapping
     display_width, display_height = image.size
@@ -2727,31 +2716,17 @@ def update_image(frame_index):
     
     img = Image.fromarray(frame)
     orig_width, orig_height = img.size
- 
-    max_width = 351
-    max_height = 271
-    
-    #υπολογιζω το aspect ratio - αναλογία λαμβάνω απ ευθείας τις τιμές heigth-1 / width-0
-    image_aspect_ratio = img.size[1] / img.size[0]
-    #print("img.size[0]: ", img.size[0])
-    if img.size[0] > max_width:#πέρνω απ ευθείας το πλάτος
-        new_width = max_width
-        new_height = int(new_width * image_aspect_ratio)#πρέπει να είναι ακαίρεος
-        image = img.resize((new_width, new_height))#προσφέρει καλύτερη εικόνα , Image.ANTIALIAS remove at PIL 10 / use , Image.LANCZOS (δεν ειδα διαφορά
-    #print("test start")
-    # Εάν το ύψος είναι μεγαλύτερο από το μέγιστο επιτρεπόμενο ύψος
-    #print("img.size[1]: ", img.size[1])
-    if img.size[1] > max_height:#πέρνω απ ευθείας το ύχος
-        new_height = max_height
-        new_width = int(new_height / image_aspect_ratio)
-        
-        # Κάνουμε resize με βάση το ύψος
-        image = img.resize((new_width, new_height), Image.LANCZOS)
-        #print("test stop")
-    else: 
-        image = img
-        #print("image = img")
-        #print(image.size)
+
+    _pfw = preview_frame.winfo_width()
+    _pfh = preview_frame.winfo_height()
+    max_width  = max(_pfw - 4,  351) if _pfw > 10 else 351
+    max_height = max(_pfh - 4,  271) if _pfh > 10 else 271
+
+    # Scale to fit — works both up (enlarge) and down (shrink)
+    scale = min(max_width / orig_width, max_height / orig_height)
+    new_width  = max(1, int(orig_width  * scale))
+    new_height = max(1, int(orig_height * scale))
+    image = img.resize((new_width, new_height), Image.LANCZOS)
 
     # Calculate scale factors for annotation coordinate mapping
     display_width, display_height = image.size
@@ -3587,10 +3562,11 @@ console.grid(row=0, column=0)#, sticky="w"
 # Ρύθμιση του grid για να προσαρμόζεται δυναμικά το παράθυρο
 root.grid_columnconfigure(0, weight=0)#, minsize=50
 root.grid_columnconfigure(1, weight=0)#, minsize=50
-root.grid_columnconfigure(2, weight=1)
-root.grid_columnconfigure(3, weight=1)
-#root.grid_rowconfigure(1, weight=1)
-#root.grid_rowconfigure(2, weight=1)
+root.grid_columnconfigure(2, weight=3)   # canvas column — ~75% of remaining space
+root.grid_columnconfigure(3, weight=1)   # attributes/annotations column — ~25%
+root.grid_rowconfigure(1, weight=1)      # main content row expands vertically
+root.grid_rowconfigure(2, weight=1)
+root.grid_rowconfigure(3, weight=1)
 # Εμφάνιση του παραθύρου
 
 #root.bind("<F12>",quit)
