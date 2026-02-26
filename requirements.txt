@@ -1,0 +1,6 @@
+pydicom
+Pillow
+opencv-python
+numpy
+matplotlib
+tkhtmlview
