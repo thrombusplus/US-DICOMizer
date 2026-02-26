@@ -26,6 +26,8 @@ import logging
 from datetime import datetime
 import time
 from time import strftime
+import json
+import uuid
 
 '''
 added auto bounding for cropping
@@ -35,6 +37,26 @@ minor changes at logs output
 version = "4.16"
 temp_output_dir = None
 zcount = 0
+
+# ---------- Annotation state ----------
+# global_annotations[file_path] = {
+#     "classification": {"grading": "", "dvt": ""},
+#     "frames": {
+#         frame_index: [
+#             {"label": str, "points": [[x,y], ...]},
+#             ...
+#         ]
+#     }
+# }
+global_annotations = {}
+annotation_drawing_mode = False
+annotation_current_polygon = []        # list of (x, y) in original-image coords
+annotation_canvas_ids = []             # temp canvas item ids while drawing
+annotation_scale_x = 1.0
+annotation_scale_y = 1.0
+annotation_current_file = None         # file_path of the file being previewed
+annotation_notebook = None             # ttk.Notebook for Attributes/Annotations tabs
+
 #app_dir = os.path.join(os.environ['USERPROFILE'],".anonymizer")
 #output_dir = os.path.join(os.environ['USERPROFILE'],".anonymizer\output")
 #output_dir = os.path.normpath(output_dir)
@@ -640,6 +662,15 @@ def load_folder():
         #προσθήκη των DICOM αρχείων στο treeview
         for file_path in dicom_files:
             add_to_selected(file_path)
+            # Check for annotation JSON alongside each DICOM file (auto-detect format)
+            json_path = os.path.splitext(file_path)[0] + ".json"
+            darwin_path = os.path.splitext(file_path)[0] + "_darwin.json"
+            if os.path.isfile(darwin_path):
+                detect_and_import_annotations(darwin_path, file_path)
+                console_message(f"Loaded Darwin annotations from {darwin_path}", level="info")
+            elif os.path.isfile(json_path):
+                detect_and_import_annotations(json_path, file_path)
+                console_message(f"Loaded annotations from {json_path}", level="info")
 
         console_message("loaded dicom files successfully from folder with filedialog",level="info")
         temp_output_dir = None
@@ -847,6 +878,10 @@ def clear_anon_treeview():
         preview_frame.destroy()
         info_frame.destroy()
         tags_tree_frame.destroy()
+        try:
+            annotation_notebook.destroy()
+        except Exception:
+            pass
         
     items = anonimyzed_files_treeview.get_children()
     for item in items:
@@ -859,6 +894,10 @@ def clear_anon_treeview2():
         preview_frame.destroy()
         info_frame.destroy()
         tags_tree_frame.destroy()
+        try:
+            annotation_notebook.destroy()
+        except Exception:
+            pass
         
     items = anonimyzed_files_treeview.get_children()
     for item in items:
@@ -933,8 +972,13 @@ def load_zip_and_display():
             with zipfile.ZipFile(zip_file_path, 'a') as archive:
                 #archive.printdir()# print for debug
                 dicom_files = []
+                json_files = []
 
                 for file in archive.namelist():#διαβλαζω το κάθε αρχείο απο τη namelist
+                    # Also collect JSON annotation files
+                    if file.lower().endswith('.json'):
+                        json_files.append(file)
+                        continue
                     with archive.open(file) as f:
                         try:# ελέγχω αν το αρχείο είναι τύπου dicom. ακόμη και αν δεν εχει κατάληξη .dcm
                             ds = pydicom.dcmread(f)
@@ -973,6 +1017,14 @@ def load_zip_and_display():
                             countZ += 1
                     console_message(f"Total saved files to temp folder: {countZ}", level="debug")
 
+                # Also extract JSON annotation files
+                for json_file in json_files:
+                    json_out_path = os.path.join(temp_output_dir, os.path.basename(json_file))
+                    with archive.open(json_file) as jf:
+                        with open(json_out_path, 'wb') as output_file:
+                            output_file.write(jf.read())
+                    console_message(f"Extracted annotation JSON: {json_out_path}", level="debug")
+
             load_folder()
             loading_popup.destroy()
             file_count = sum(len(files) for _, _, files in os.walk(output_path))
@@ -1009,15 +1061,25 @@ tree_flag = 0
 #Συνάρτηση όπου ανοίγει το αρχείο DICOM και διαβάζει τα tags και την εικόνα, κάνει και αυτόματη ανίχνευση
 def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     global tree_flag, tags_tree_frame, preview_frame, info_frame, ds, img_label, video_slider, current_frame_index, crop_values_apply_btn # Χρήση των global μεταβλητών
+    global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_scale_x, annotation_scale_y, annotation_current_file, annotation_notebook
     #loading_popup = popup_message("Preview", "loading...\nPlease wait.")#, delay=2000
     #ελεγχος αν υπάρχει ήδη frame και διαγραφή τους
     if tree_flag == 1:
         preview_frame.destroy()
         info_frame.destroy()
         tags_tree_frame.destroy()
+        try:
+            annotation_notebook.destroy()
+        except Exception:
+            pass
     #print("tag_value: ",tag_value)
     #print(type(tag_value))
     tree_flag = 1
+    # Reset annotation drawing state for new preview
+    annotation_drawing_mode = False
+    annotation_current_polygon = []
+    annotation_canvas_ids = []
+    annotation_current_file = file_path
     ds = pydicom.dcmread(file_path) #ανάγνωση του αρχείου DICOM
     num_frames = get_nr_frames(ds)
 
@@ -1032,10 +1094,204 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     
     #frame_2.grid_columnconfigure(0, weight=1)
     frame_3.grid_columnconfigure(0, weight=1)
-    # ------- Frame με τα tags -------
-    tags_tree_frame = tk.Frame(frame_3)#Σταθερό πλάτος και ύψος , width=50, height=400
-    tags_tree_frame.grid(row=0, column=0, padx=5, pady=5, sticky="nsew") 
+    frame_3.grid_rowconfigure(0, weight=1)
+
+    # ------- Notebook with Attributes and Annotations tabs -------
+    annotation_notebook = ttk.Notebook(frame_3)
+    annotation_notebook.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
+
+    # Tab 1: Attributes (existing tags treeview)
+    tags_tree_frame = tk.Frame(annotation_notebook)
     tags_tree_frame.grid_columnconfigure(0, weight=1)
+    tags_tree_frame.grid_rowconfigure(0, weight=1)
+    annotation_notebook.add(tags_tree_frame, text="Attributes")
+
+    # Tab 2: Annotations (new)
+    annotations_tab_frame = tk.Frame(annotation_notebook)
+    annotations_tab_frame.grid_columnconfigure(0, weight=1)
+    annotation_notebook.add(annotations_tab_frame, text="Annotations")
+
+    # --- Annotation tab content ---
+    ann_data = get_annotation_data(file_path)
+
+    # Classification section
+    class_frame = tk.LabelFrame(annotations_tab_frame, text="Classification (per file)", font=("Segoe UI", 9))
+    class_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+    class_frame.grid_columnconfigure(1, weight=1)
+
+    tk.Label(class_frame, text="Image Grading:", font=("Segoe UI", 8)).grid(row=0, column=0, padx=5, pady=2, sticky="w")
+    grading_var = tk.StringVar(value=ann_data["classification"]["grading"])
+    grading_combo = ttk.Combobox(class_frame, textvariable=grading_var, width=14, state="readonly",
+                                 values=["", "Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5"])
+    grading_combo.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+
+    tk.Label(class_frame, text="DVT Status:", font=("Segoe UI", 8)).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+    dvt_var = tk.StringVar(value=ann_data["classification"]["dvt"])
+    dvt_combo = ttk.Combobox(class_frame, textvariable=dvt_var, width=14, state="readonly",
+                              values=["", "DVT", "NO DVT"])
+    dvt_combo.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+
+    def on_classification_change(event=None):
+        save_classification_to_annotations(file_path, grading_var.get(), dvt_var.get())
+        console_message(f"Classification saved: grading={grading_var.get()}, dvt={dvt_var.get()}", level="info")
+
+    grading_combo.bind("<<ComboboxSelected>>", on_classification_change)
+    dvt_combo.bind("<<ComboboxSelected>>", on_classification_change)
+
+    # Segmentation section
+    seg_frame = tk.LabelFrame(annotations_tab_frame, text="Polygon Segmentation (per frame)", font=("Segoe UI", 9))
+    seg_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+
+    draw_mode_var = tk.BooleanVar(value=False)
+
+    def toggle_draw_mode():
+        global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids
+        annotation_drawing_mode = not annotation_drawing_mode
+        draw_mode_var.set(annotation_drawing_mode)
+        if annotation_drawing_mode:
+            draw_btn.config(text="Drawing... (click to add points)")
+            img_label.config(cursor="crosshair")
+        else:
+            draw_btn.config(text="Draw Polygon")
+            img_label.config(cursor="")
+            # Discard any in-progress polygon
+            annotation_current_polygon = []
+            for cid in annotation_canvas_ids:
+                img_label.delete(cid)
+            annotation_canvas_ids = []
+
+    def clear_frame_annotations():
+        global current_frame_index
+        data = get_annotation_data(file_path)
+        frame_key = str(current_frame_index)
+        if frame_key in data["frames"]:
+            del data["frames"][frame_key]
+        draw_annotations_on_canvas(img_label, file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
+        update_annotation_list()
+        console_message(f"Cleared annotations for frame {current_frame_index}", level="info")
+
+    def clear_all_annotations():
+        data = get_annotation_data(file_path)
+        data["frames"] = {}
+        draw_annotations_on_canvas(img_label, file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
+        update_annotation_list()
+        console_message("Cleared all annotations for this file", level="info")
+
+    draw_btn = ttk.Button(seg_frame, text="Draw Polygon", command=toggle_draw_mode, style="small.TButton")
+    draw_btn.grid(row=0, column=0, padx=5, pady=3, sticky="w")
+
+    clear_frame_btn = ttk.Button(seg_frame, text="Clear Frame", command=clear_frame_annotations, style="small.TButton")
+    clear_frame_btn.grid(row=0, column=1, padx=5, pady=3, sticky="w")
+
+    clear_all_btn = ttk.Button(seg_frame, text="Clear All", command=clear_all_annotations, style="small.TButton")
+    clear_all_btn.grid(row=0, column=2, padx=5, pady=3, sticky="w")
+
+    draw_hint = tk.Label(seg_frame, text="Left-click: add point | Right-click: close polygon", font=("Segoe UI", 7), fg="gray")
+    draw_hint.grid(row=1, column=0, columnspan=3, padx=5, pady=0, sticky="w")
+
+    # Annotation list for current frame
+    ann_list_frame = tk.LabelFrame(annotations_tab_frame, text="Annotations list", font=("Segoe UI", 9))
+    ann_list_frame.grid(row=2, column=0, padx=5, pady=5, sticky="nsew")
+    ann_list_frame.grid_columnconfigure(0, weight=1)
+    ann_list_frame.grid_rowconfigure(0, weight=1)
+
+    ann_listbox = tk.Listbox(ann_list_frame, height=12, font=("Segoe UI", 8))
+    ann_listbox.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+    ann_list_scrollbar = tk.Scrollbar(ann_list_frame, orient="vertical", command=ann_listbox.yview)
+    ann_list_scrollbar.grid(row=0, column=1, sticky="ns")
+    ann_listbox.configure(yscrollcommand=ann_list_scrollbar.set)
+
+    def update_annotation_list():
+        """Refresh the annotation listbox to show all annotations for this file."""
+        ann_listbox.delete(0, tk.END)
+        data = global_annotations.get(file_path, {})
+        frames_data = data.get("frames", {})
+        for fk in sorted(frames_data.keys(), key=lambda x: int(x)):
+            for i, poly in enumerate(frames_data[fk]):
+                n_pts = len(poly["points"])
+                ann_listbox.insert(tk.END, f"Frame {fk} | {poly['label']} | {n_pts} pts")
+
+    def delete_selected_annotation():
+        sel = ann_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        data = global_annotations.get(file_path, {})
+        frames_data = data.get("frames", {})
+        counter = 0
+        for fk in sorted(frames_data.keys(), key=lambda x: int(x)):
+            for i, poly in enumerate(frames_data[fk]):
+                if counter == idx:
+                    frames_data[fk].pop(i)
+                    if not frames_data[fk]:
+                        del frames_data[fk]
+                    draw_annotations_on_canvas(img_label, file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
+                    update_annotation_list()
+                    return
+                counter += 1
+
+    del_ann_btn = ttk.Button(ann_list_frame, text="Delete Selected", command=delete_selected_annotation, style="small.TButton")
+    del_ann_btn.grid(row=1, column=0, padx=5, pady=3, sticky="w")
+
+    # Export / Import annotations for this file
+    io_frame = tk.Frame(annotations_tab_frame)
+    io_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
+
+    # Format selector
+    fmt_label = tk.Label(io_frame, text="Format:")
+    fmt_label.grid(row=0, column=0, padx=(5, 2), pady=3, sticky="w")
+    ann_format_var = tk.StringVar(value="LabelMe")
+    fmt_combo = ttk.Combobox(io_frame, textvariable=ann_format_var, values=["LabelMe", "Darwin V7"], state="readonly", width=10)
+    fmt_combo.grid(row=0, column=1, padx=2, pady=3, sticky="w")
+
+    def export_ann_file():
+        fmt = ann_format_var.get()
+        suffix = "_annotations.json" if fmt == "LabelMe" else "_darwin.json"
+        out_path = filedialog.asksaveasfilename(
+            title=f"Export annotations ({fmt})",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            initialfile=os.path.basename(file_path).replace(".dcm", suffix)
+        )
+        if out_path:
+            if fmt == "Darwin V7":
+                # Determine frame count from DICOM
+                fc = 1
+                try:
+                    ds = pydicom.dcmread(file_path, force=True)
+                    fc = getattr(ds, 'NumberOfFrames', 1) or 1
+                    fc = int(fc)
+                except Exception:
+                    pass
+                export_annotations_darwin_json(file_path, out_path, columnsNo, rowsNo, fc)
+            else:
+                export_annotations_json(file_path, out_path, columnsNo, rowsNo)
+            messagebox.showinfo("Export", f"Annotations exported ({fmt}) to:\n{out_path}")
+
+    def import_ann_file():
+        in_path = filedialog.askopenfilename(
+            title="Import annotations JSON",
+            filetypes=[("JSON files", "*.json")]
+        )
+        if in_path:
+            detected = detect_and_import_annotations(in_path, file_path)
+            # Refresh UI
+            ann_data_refreshed = get_annotation_data(file_path)
+            grading_var.set(ann_data_refreshed["classification"]["grading"])
+            dvt_var.set(ann_data_refreshed["classification"]["dvt"])
+            update_annotation_list()
+            draw_annotations_on_canvas(img_label, file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
+            fmt_name = "Darwin V7" if detected == "darwin" else "LabelMe"
+            messagebox.showinfo("Import", f"Annotations imported ({fmt_name}).")
+
+    export_btn = ttk.Button(io_frame, text="Export", command=export_ann_file, style="small.TButton")
+    export_btn.grid(row=0, column=2, padx=5, pady=3, sticky="w")
+
+    import_btn = ttk.Button(io_frame, text="Import", command=import_ann_file, style="small.TButton")
+    import_btn.grid(row=0, column=3, padx=5, pady=3, sticky="w")
+
+    # Initial populate
+    update_annotation_list()
 
     #sυνάρτηση για να αντιγράφει μόνο το περιεχόμενο του κελιού
     def copy_cell_to_clipboard(content):
@@ -1792,13 +2048,57 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             else:
                 video_slider.config(tickinterval=5)
 
-            #Δημιουργία Label για την εμφάνιση της εικόνας
-            img_label = tk.Label(preview_frame)
+            #Δημιουργία Canvas για την εμφάνιση της εικόνας (αντί Label, υποστηρίζει polygon drawing)
+            img_label = tk.Canvas(preview_frame, bg="black", highlightthickness=0)
             img_label.grid(row=0, column=0)
             
             def show_image_on_dclick():#συνάρτηση για να κάνει plot την εκόνα όταν ο χρήστης κάνει 2πλο κλικ επάνω της
-                plot_image(pixel_array(ds, index=current_frame_index), source_stage)
+                if not annotation_drawing_mode:
+                    plot_image(pixel_array(ds, index=current_frame_index), source_stage)
 
+            # --- Polygon drawing event handlers ---
+            def on_canvas_left_click(event):
+                global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_scale_x, annotation_scale_y
+                if not annotation_drawing_mode:
+                    return
+                # Convert canvas coords to original image coords
+                orig_x = event.x / annotation_scale_x
+                orig_y = event.y / annotation_scale_y
+                annotation_current_polygon.append([orig_x, orig_y])
+                # Draw point marker
+                cid = img_label.create_oval(event.x - 3, event.y - 3, event.x + 3, event.y + 3,
+                                            fill="#FF0000", outline="#FF0000", tags="drawing")
+                annotation_canvas_ids.append(cid)
+                # Draw line to previous point
+                if len(annotation_current_polygon) > 1:
+                    prev = annotation_current_polygon[-2]
+                    px, py = prev[0] * annotation_scale_x, prev[1] * annotation_scale_y
+                    cid = img_label.create_line(px, py, event.x, event.y,
+                                                fill="#FF0000", width=2, tags="drawing")
+                    annotation_canvas_ids.append(cid)
+
+            def on_canvas_right_click(event):
+                """Close the current polygon and save it."""
+                global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids
+                if not annotation_drawing_mode:
+                    return
+                if len(annotation_current_polygon) < 3:
+                    console_message("Need at least 3 points to close polygon", level="warning")
+                    return
+                # Save the polygon
+                save_polygon_to_annotations(file_path, current_frame_index, annotation_current_polygon, label="polygon")
+                console_message(f"Polygon saved on frame {current_frame_index} with {len(annotation_current_polygon)} points", level="info")
+                # Clean up temp drawing items
+                for cid in annotation_canvas_ids:
+                    img_label.delete(cid)
+                annotation_canvas_ids = []
+                annotation_current_polygon = []
+                # Redraw saved annotations
+                draw_annotations_on_canvas(img_label, file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
+                update_annotation_list()
+
+            img_label.bind("<Button-1>", on_canvas_left_click)
+            img_label.bind("<Button-3>", on_canvas_right_click)
             img_label.bind("<Double-1>", lambda event: show_image_on_dclick())
             '''
             plot_button = ttk.Button(info_frame, text="Show image", style="small.TButton",
@@ -1857,7 +2157,334 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
     #loading_popup.destroy()
     
-    
+
+# ===================== Annotation helper functions =====================
+
+def get_annotation_data(file_path):
+    """Return the annotation dict for the given file, creating if needed."""
+    global global_annotations
+    if file_path not in global_annotations:
+        global_annotations[file_path] = {
+            "classification": {"grading": "", "dvt": ""},
+            "frames": {}
+        }
+    return global_annotations[file_path]
+
+def save_polygon_to_annotations(file_path, frame_index, points, label="polygon"):
+    """Save a completed polygon (list of [x,y]) for a specific frame."""
+    data = get_annotation_data(file_path)
+    frame_key = str(frame_index)
+    if frame_key not in data["frames"]:
+        data["frames"][frame_key] = []
+    data["frames"][frame_key].append({
+        "label": label,
+        "points": points
+    })
+
+def save_classification_to_annotations(file_path, grading, dvt):
+    """Save classification labels for the file."""
+    data = get_annotation_data(file_path)
+    data["classification"]["grading"] = grading
+    data["classification"]["dvt"] = dvt
+
+def export_annotations_json(file_path, output_json_path, image_width=0, image_height=0):
+    """Export annotations for a single DICOM file in LabelMe-inspired JSON format."""
+    data = get_annotation_data(file_path)
+    shapes = []
+    for frame_key, polygons in data["frames"].items():
+        for poly in polygons:
+            shapes.append({
+                "label": poly["label"],
+                "points": poly["points"],
+                "group_id": None,
+                "description": "",
+                "shape_type": "polygon",
+                "frame": int(frame_key),
+                "flags": {}
+            })
+    annotation_out = {
+        "version": "1.0",
+        "flags": data["classification"],
+        "shapes": shapes,
+        "imagePath": os.path.basename(output_json_path).replace(".json", ".dcm"),
+        "imageWidth": image_width,
+        "imageHeight": image_height
+    }
+    with open(output_json_path, 'w', encoding='utf-8') as f:
+        json.dump(annotation_out, f, indent=2, ensure_ascii=False)
+
+def import_annotations_json(json_path, file_path):
+    """Import annotations from a LabelMe-inspired JSON file into global_annotations."""
+    global global_annotations
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            ann = json.load(f)
+        data = get_annotation_data(file_path)
+        # Classification flags
+        if "flags" in ann and isinstance(ann["flags"], dict):
+            data["classification"]["grading"] = ann["flags"].get("grading", "")
+            data["classification"]["dvt"] = ann["flags"].get("dvt", "")
+        # Shapes -> frames
+        for shape in ann.get("shapes", []):
+            frame_key = str(shape.get("frame", 0))
+            if frame_key not in data["frames"]:
+                data["frames"][frame_key] = []
+            data["frames"][frame_key].append({
+                "label": shape.get("label", "polygon"),
+                "points": shape.get("points", [])
+            })
+    except Exception as e:
+        console_message(f"Failed to import annotations from {json_path}: {e}", level="error")
+
+def draw_annotations_on_canvas(canvas, file_path, frame_index, scale_x, scale_y):
+    """Draw saved polygons for the given frame onto the canvas."""
+    canvas.delete("annotation")  # clear previous annotation drawings
+    data = global_annotations.get(file_path, {})
+    frame_key = str(frame_index)
+    polygons = data.get("frames", {}).get(frame_key, [])
+    colors = ["#00FF00", "#FF00FF", "#FFFF00", "#00FFFF", "#FF8000", "#8000FF"]
+    for i, poly in enumerate(polygons):
+        color = colors[i % len(colors)]
+        pts = poly["points"]
+        if len(pts) < 2:
+            continue
+        # Scale points from original coords to canvas coords
+        scaled = []
+        for p in pts:
+            scaled.extend([p[0] * scale_x, p[1] * scale_y])
+        # Close the polygon
+        canvas.create_polygon(scaled, outline=color, fill="", width=2, tags="annotation")
+        # Draw point markers
+        for p in pts:
+            sx, sy = p[0] * scale_x, p[1] * scale_y
+            canvas.create_oval(sx - 3, sy - 3, sx + 3, sy + 3, fill=color, outline=color, tags="annotation")
+
+
+# ---------- Darwin V7 JSON v2.0 format support ----------
+
+def export_annotations_darwin_json(file_path, output_json_path, image_width=0, image_height=0, frame_count=1):
+    """Export annotations in Darwin V7 JSON v2.0 format."""
+    data = get_annotation_data(file_path)
+    dcm_filename = os.path.basename(output_json_path).replace(".json", ".dcm")
+
+    annotations_list = []
+
+    # --- Polygon annotations ---
+    # Group polygons by (frame_key, label) to match Darwin structure
+    for frame_key, polygons in data["frames"].items():
+        for poly in polygons:
+            ann_id = str(uuid.uuid4())
+            frame_idx = int(frame_key)
+            pts = poly["points"]
+            if len(pts) < 3:
+                continue
+
+            # Compute bounding box
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            bbox = {
+                "x": min(xs),
+                "y": min(ys),
+                "w": max(xs) - min(xs),
+                "h": max(ys) - min(ys)
+            }
+
+            polygon_entry = {
+                "annotators": [],
+                "frames": {
+                    str(frame_idx): {
+                        "bounding_box": bbox,
+                        "keyframe": True,
+                        "polygon": {
+                            "paths": [
+                                [{"x": p[0], "y": p[1]} for p in pts]
+                            ]
+                        }
+                    }
+                },
+                "global_sub_types": {},
+                "id": ann_id,
+                "interpolate_algorithm": "linear-1.1",
+                "interpolated": True,
+                "name": poly.get("label", "polygon"),
+                "properties": [],
+                "ranges": [[frame_idx, frame_idx + 1]],
+                "reviewers": [],
+                "slot_names": ["0"],
+                "updated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            }
+            annotations_list.append(polygon_entry)
+
+    # --- Classification / tag annotations ---
+    grading = data["classification"].get("grading", "")
+    dvt = data["classification"].get("dvt", "")
+
+    # Emit grading as a tag annotation (per-file, applied to frame 0)
+    if grading:
+        annotations_list.append({
+            "annotators": [],
+            "frames": {
+                "0": {
+                    "keyframe": True,
+                    "tag": {}
+                }
+            },
+            "id": str(uuid.uuid4()),
+            "name": "ACEP Grading Score",
+            "properties": [
+                {
+                    "frame_index": 0,
+                    "name": "ACEP Grading Score",
+                    "value": grading.replace("Grade ", "")  # "Grade 2" -> "2"
+                }
+            ],
+            "ranges": [[0, 1]],
+            "reviewers": [],
+            "slot_names": ["0"],
+            "updated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        })
+
+    # Emit DVT status as a tag annotation
+    if dvt:
+        annotations_list.append({
+            "annotators": [],
+            "frames": {
+                "0": {
+                    "keyframe": True,
+                    "tag": {}
+                }
+            },
+            "id": str(uuid.uuid4()),
+            "name": "DVT Status",
+            "properties": [
+                {
+                    "frame_index": 0,
+                    "name": "DVT Status",
+                    "value": dvt
+                }
+            ],
+            "ranges": [[0, 1]],
+            "reviewers": [],
+            "slot_names": ["0"],
+            "updated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        })
+
+    darwin_out = {
+        "version": "2.0",
+        "schema_ref": "https://darwin-public.s3.eu-west-1.amazonaws.com/darwin_json/2.0/schema.json",
+        "item": {
+            "name": dcm_filename,
+            "path": "/",
+            "source_info": {
+                "item_id": str(uuid.uuid4()),
+                "dataset": {
+                    "name": "",
+                    "slug": "",
+                    "dataset_management_url": ""
+                },
+                "team": {
+                    "name": "",
+                    "slug": ""
+                },
+                "workview_url": ""
+            },
+            "slots": [
+                {
+                    "type": "dicom",
+                    "slot_name": "0",
+                    "width": image_width,
+                    "height": image_height,
+                    "fps": None,
+                    "thumbnail_url": "",
+                    "source_files": [
+                        {
+                            "file_name": dcm_filename,
+                            "url": ""
+                        }
+                    ],
+                    "frame_count": frame_count,
+                    "frame_urls": [],
+                    "metadata": {
+                        "handler": None,
+                        "shape": None,
+                        "colorspace": "RGB",
+                        "primary_plane": "AXIAL"
+                    }
+                }
+            ]
+        },
+        "annotations": annotations_list,
+        "properties": []
+    }
+
+    with open(output_json_path, 'w', encoding='utf-8') as f:
+        json.dump(darwin_out, f, indent=2, ensure_ascii=False)
+
+
+def import_annotations_darwin_json(json_path, file_path):
+    """Import annotations from a Darwin V7 JSON v2.0 file into global_annotations."""
+    global global_annotations
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            darwin = json.load(f)
+
+        data = get_annotation_data(file_path)
+
+        for ann in darwin.get("annotations", []):
+            ann_name = ann.get("name", "")
+
+            # --- Tag / classification annotations ---
+            if ann.get("properties"):
+                for prop in ann["properties"]:
+                    prop_name = prop.get("name", "")
+                    prop_value = prop.get("value", "")
+                    if prop_name == "ACEP Grading Score":
+                        # Map "2" -> "Grade 2"
+                        data["classification"]["grading"] = f"Grade {prop_value}" if prop_value else ""
+                    elif prop_name == "DVT Status":
+                        data["classification"]["dvt"] = prop_value
+                continue  # skip to next annotation (tag has no polygon)
+
+            # --- Polygon annotations ---
+            frames_data = ann.get("frames", {})
+            for frame_key, frame_content in frames_data.items():
+                polygon_data = frame_content.get("polygon", {})
+                paths = polygon_data.get("paths", [])
+                for path in paths:
+                    points = [[pt["x"], pt["y"]] for pt in path]
+                    if len(points) < 3:
+                        continue
+                    if frame_key not in data["frames"]:
+                        data["frames"][frame_key] = []
+                    data["frames"][frame_key].append({
+                        "label": ann_name,
+                        "points": points
+                    })
+
+    except Exception as e:
+        console_message(f"Failed to import Darwin annotations from {json_path}: {e}", level="error")
+
+
+def detect_and_import_annotations(json_path, file_path):
+    """Auto-detect JSON format (LabelMe or Darwin V7) and import accordingly."""
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if "annotations" in data and "item" in data:
+            # Darwin V7 format
+            import_annotations_darwin_json(json_path, file_path)
+            return "darwin"
+        else:
+            # LabelMe-inspired format
+            import_annotations_json(json_path, file_path)
+            return "labelme"
+    except Exception as e:
+        console_message(f"Failed to detect/import annotations from {json_path}: {e}", level="error")
+        return None
+
+# ===================== End annotation helpers =====================
+
+
 def popup_message(title, message): #, delay=2000
     #νέο παραθύρο
     popup = tk.Toplevel()
@@ -1896,7 +2523,7 @@ def plot_image(image, source_stage):
     plt.show()
 
 def update_image_with_crop_area(frame_index, crop_x_start, crop_y_start, crop_x_end, crop_y_end, applied_value):
-    global img_label, ds, current_frame_index
+    global img_label, ds, current_frame_index, annotation_scale_x, annotation_scale_y
 
     current_frame_index = int(frame_index)
 
@@ -1915,6 +2542,7 @@ def update_image_with_crop_area(frame_index, crop_x_start, crop_y_start, crop_x_
         frame = np.uint8(frame)
     
     img = Image.fromarray(frame).convert("RGB")#κάνω convert γιατι αν ειναι MONOCHROME2 δε ξεχωρίζει
+    orig_width, orig_height = img.size
 
     #ελέγχω αν οι τιμές crop area ειναι έγκυρες
     #print("prin to try: ",applied_value)
@@ -1958,17 +2586,27 @@ def update_image_with_crop_area(frame_index, crop_x_start, crop_y_start, crop_x_
     else: 
         image = img
 
-    img_tk = ImageTk.PhotoImage(image)#χρήση της ImageTk.PhotoImage απο την PIL
-    #del img#ίσως εδω βοηθάει τον garbage collector στη διαχείρηση μνήμης. ίσως ειναι περιττό
+    # Calculate scale factors for annotation coordinate mapping
+    display_width, display_height = image.size
+    annotation_scale_x = display_width / orig_width if orig_width > 0 else 1.0
+    annotation_scale_y = display_height / orig_height if orig_height > 0 else 1.0
 
-    #ενημέρωση της εικόνας στο Label με το αντικειμενο PhotoImage
-    img_label.config(image=img_tk)
-    img_label.image = img_tk  #αν δε μπεί αυτό χάνετε η εικόνα απο το label
+    img_tk = ImageTk.PhotoImage(image)#χρήση της ImageTk.PhotoImage απο την PIL
+
+    #ενημέρωση της εικόνας στο Canvas
+    img_label.delete("all")
+    img_label.config(width=display_width, height=display_height)
+    img_label.create_image(0, 0, anchor="nw", image=img_tk, tags="bg_image")
+    img_label.image = img_tk  #αν δε μπεί αυτό χάνετε η εικόνα
+
+    # Draw saved annotations for this frame
+    if annotation_current_file:
+        draw_annotations_on_canvas(img_label, annotation_current_file, current_frame_index, annotation_scale_x, annotation_scale_y)
 
 
 #Συνάρτηση για ενημέρωση της εικόνας ανάλογα με το frame
 def update_image(frame_index):
-    global img_label, ds, current_frame_index
+    global img_label, ds, current_frame_index, annotation_scale_x, annotation_scale_y
 
     current_frame_index = int(frame_index)
     
@@ -1985,6 +2623,7 @@ def update_image(frame_index):
         frame = np.uint8(frame)
     
     img = Image.fromarray(frame)
+    orig_width, orig_height = img.size
  
     max_width = 351
     max_height = 271
@@ -2010,14 +2649,23 @@ def update_image(frame_index):
         image = img
         #print("image = img")
         #print(image.size)
-        
+
+    # Calculate scale factors for annotation coordinate mapping
+    display_width, display_height = image.size
+    annotation_scale_x = display_width / orig_width if orig_width > 0 else 1.0
+    annotation_scale_y = display_height / orig_height if orig_height > 0 else 1.0
     
     img_tk = ImageTk.PhotoImage(image)#χρήση της ImageTk.PhotoImage απο την PIL
-    #del img#ίσως εδω βοηθάει τον garbage collector στη διαχείρηση μνήμης. ίσως ειναι περιττό
 
-    #ενημέρωση της εικόνας στο Label με το αντικειμενο PhotoImage
-    img_label.config(image=img_tk)
-    img_label.image = img_tk  #αν δε μπεί αυτό χάνετε η εικόνα απο το label
+    #ενημέρωση της εικόνας στο Canvas
+    img_label.delete("all")
+    img_label.config(width=display_width, height=display_height)
+    img_label.create_image(0, 0, anchor="nw", image=img_tk, tags="bg_image")
+    img_label.image = img_tk  #αν δε μπεί αυτό χάνετε η εικόνα
+
+    # Draw saved annotations for this frame
+    if annotation_current_file:
+        draw_annotations_on_canvas(img_label, annotation_current_file, current_frame_index, annotation_scale_x, annotation_scale_y)
 
 def anonymize_selected_files():
 
@@ -2119,6 +2767,10 @@ def anonymize_selected_files():
             preview_frame.destroy()
             info_frame.destroy()
             tags_tree_frame.destroy()
+            try:
+                annotation_notebook.destroy()
+            except Exception:
+                pass
         
         messagebox.showinfo("Anonymization", "Task completed.")
         console_message("anonymization completed",level="debug")
@@ -2331,6 +2983,25 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
         ds.save_as(output_filename, enforce_file_format=True)
         #ds.save_as(output_filename, write_like_original=False)
         output_directory2 = output_directory
+
+        # Export annotation JSON alongside the DICOM file if annotations exist
+        if file_path in global_annotations:
+            ann_data = global_annotations[file_path]
+            has_annotations = (ann_data["classification"]["grading"] or ann_data["classification"]["dvt"] or ann_data["frames"])
+            if has_annotations:
+                # LabelMe format
+                json_filename = output_filename.replace(".dcm", ".json")
+                export_annotations_json(file_path, json_filename, crop_width, crop_height)
+                console_message(f"Annotations exported (LabelMe): {json_filename}", level="debug")
+                # Darwin V7 format
+                darwin_filename = output_filename.replace(".dcm", "_darwin.json")
+                fc = 1
+                try:
+                    fc = int(getattr(ds, 'NumberOfFrames', 1) or 1)
+                except Exception:
+                    pass
+                export_annotations_darwin_json(file_path, darwin_filename, crop_width, crop_height, fc)
+                console_message(f"Annotations exported (Darwin): {darwin_filename}", level="debug")
 
         #print(f"New cropped file saved as: {output_filename}")
         console_message(f"New cropped file saved as: {output_filename}",level="debug")
