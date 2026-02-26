@@ -2296,6 +2296,17 @@ def save_classification_to_annotations(file_path, grading, dvt):
 def export_annotations_json(file_path, output_json_path, image_width=0, image_height=0):
     """Export annotations for a single DICOM file in LabelMe-inspired JSON format."""
     data = get_annotation_data(file_path)
+
+    # Read patient ID from the DICOM file (tag 0010,0020)
+    patient_id = ""
+    try:
+        _ds = pydicom.dcmread(file_path, stop_before_pixels=True)
+        _pid = _ds.get((0x0010, 0x0020), None)
+        if _pid is not None:
+            patient_id = str(_pid.value).strip()
+    except Exception:
+        pass
+
     shapes = []
     for frame_key, polygons in data["frames"].items():
         for poly in polygons:
@@ -2310,7 +2321,11 @@ def export_annotations_json(file_path, output_json_path, image_width=0, image_he
             })
     annotation_out = {
         "version": "1.0",
-        "flags": data["classification"],
+        "flags": {
+            "patient_id": patient_id,
+            "grading": data["classification"].get("grading", ""),
+            "dvt": data["classification"].get("dvt", ""),
+        },
         "shapes": shapes,
         "imagePath": os.path.basename(output_json_path).replace(".json", ".dcm"),
         "imageWidth": image_width,
@@ -2379,6 +2394,16 @@ def export_annotations_darwin_json(file_path, output_json_path, image_width=0, i
     """Export annotations in Darwin V7 JSON v2.0 format."""
     data = get_annotation_data(file_path)
     dcm_filename = os.path.basename(output_json_path).replace(".json", ".dcm")
+
+    # Read patient ID from the DICOM file (tag 0010,0020)
+    patient_id = ""
+    try:
+        _ds = pydicom.dcmread(file_path, stop_before_pixels=True)
+        _pid = _ds.get((0x0010, 0x0020), None)
+        if _pid is not None:
+            patient_id = str(_pid.value).strip()
+    except Exception:
+        pass
 
     annotations_list = []
 
@@ -2490,6 +2515,7 @@ def export_annotations_darwin_json(file_path, output_json_path, image_width=0, i
             "path": "/",
             "source_info": {
                 "item_id": str(uuid.uuid4()),
+                "patient_id": patient_id,
                 "dataset": {
                     "name": "",
                     "slug": "",
