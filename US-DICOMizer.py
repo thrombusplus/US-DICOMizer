@@ -56,6 +56,35 @@ annotation_scale_x = 1.0
 annotation_scale_y = 1.0
 annotation_current_file = None         # file_path of the file being previewed
 annotation_notebook = None             # ttk.Notebook for Attributes/Annotations tabs
+annotation_current_label = ""          # class label currently selected for drawing
+
+# ---------- Segmentation class definitions ----------
+SEG_MASK_TO_CLASS = {
+    # --- Veins (various scanning locations) ---
+    "CFV Scanning Location 1": "Vein",    # Common Femoral Vein
+    "CFV Scanning Location 2": "Vein",
+    "GSV Scanning Location 2": "Vein",    # Great Saphenous Vein
+    "FV Scanning Location 3": "Vein",     # Femoral Vein
+    "PV Scanning Location 4": "Vein",     # Popliteal Vein
+    # --- Arteries (various scanning locations) ---
+    "CFA Scanning Location 1": "Artery",  # Common Femoral Artery
+    "CFA Scanning Location 2": "Artery",
+    "DFA Scanning Location 2": "Artery",  # Deep Femoral Artery
+    "FA Scanning Location 2": "Artery",   # Femoral Artery
+    "FA Scanning Location 3": "Artery",
+    "PA Scanning Location 4": "Artery",   # Popliteal Artery
+    # --- Other classes ---
+    "Clot": "Clot",
+    "Other": "Other",
+}
+
+# Colors used to draw polygons on canvas, keyed by category
+CLASS_CATEGORY_COLORS = {
+    "Vein":   "#00AAFF",   # blue
+    "Artery": "#FF4444",   # red
+    "Clot":   "#FFDD00",   # yellow
+    "Other":  "#AAAAAA",   # gray
+}
 
 #app_dir = os.path.join(os.environ['USERPROFILE'],".anonymizer")
 #output_dir = os.path.join(os.environ['USERPROFILE'],".anonymizer\output")
@@ -1141,24 +1170,35 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     # Segmentation section
     seg_frame = tk.LabelFrame(annotations_tab_frame, text="Polygon Segmentation (per frame)", font=("Segoe UI", 9))
     seg_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+    seg_frame.grid_columnconfigure(0, weight=1)
 
-    draw_mode_var = tk.BooleanVar(value=False)
+    # Keep track of all class buttons so we can reset their relief
+    _class_buttons = {}
 
-    def toggle_draw_mode():
-        global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids
-        annotation_drawing_mode = not annotation_drawing_mode
-        draw_mode_var.set(annotation_drawing_mode)
-        if annotation_drawing_mode:
-            draw_btn.config(text="Drawing... (click to add points)")
-            img_label.config(cursor="crosshair")
-        else:
-            draw_btn.config(text="Draw Polygon")
-            img_label.config(cursor="")
-            # Discard any in-progress polygon
-            annotation_current_polygon = []
-            for cid in annotation_canvas_ids:
-                img_label.delete(cid)
-            annotation_canvas_ids = []
+    def _cancel_draw():
+        """Cancel any in-progress polygon drawing and reset UI."""
+        global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_current_label
+        annotation_drawing_mode = False
+        annotation_current_label = ""
+        annotation_current_polygon = []
+        for cid in annotation_canvas_ids:
+            img_label.delete(cid)
+        annotation_canvas_ids = []
+        img_label.config(cursor="")
+        for btn in _class_buttons.values():
+            btn.config(relief="raised")
+
+    def start_draw_for_class(label):
+        """Activate drawing mode for the given class label."""
+        global annotation_drawing_mode, annotation_current_label, annotation_current_polygon, annotation_canvas_ids
+        # Cancel any current draw first
+        _cancel_draw()
+        annotation_drawing_mode = True
+        annotation_current_label = label
+        img_label.config(cursor="crosshair")
+        # Highlight the active button
+        if label in _class_buttons:
+            _class_buttons[label].config(relief="sunken")
 
     def clear_frame_annotations():
         global current_frame_index
@@ -1177,17 +1217,63 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         update_annotation_list()
         console_message("Cleared all annotations for this file", level="info")
 
-    draw_btn = ttk.Button(seg_frame, text="Draw Polygon", command=toggle_draw_mode, style="small.TButton")
-    draw_btn.grid(row=0, column=0, padx=5, pady=3, sticky="w")
+    # --- Vein buttons ---
+    vein_labels_frame = tk.LabelFrame(seg_frame, text="Veins", font=("Segoe UI", 8), fg="#0088CC")
+    vein_labels_frame.grid(row=0, column=0, padx=4, pady=(4, 2), sticky="ew")
+    vein_labels_frame.grid_columnconfigure((0, 1), weight=1)
+    _vein_classes = [
+        ("CFV Loc 1", "CFV Scanning Location 1"),
+        ("CFV Loc 2", "CFV Scanning Location 2"),
+        ("GSV Loc 2", "GSV Scanning Location 2"),
+        ("FV Loc 3",  "FV Scanning Location 3"),
+        ("PV Loc 4",  "PV Scanning Location 4"),
+    ]
+    for _vi, (_short, _full) in enumerate(_vein_classes):
+        _btn = ttk.Button(vein_labels_frame, text=_short, style="small.TButton",
+                          command=lambda lbl=_full: start_draw_for_class(lbl))
+        _btn.grid(row=_vi // 2, column=_vi % 2, padx=3, pady=2, sticky="ew")
+        _class_buttons[_full] = _btn
 
-    clear_frame_btn = ttk.Button(seg_frame, text="Clear Frame", command=clear_frame_annotations, style="small.TButton")
-    clear_frame_btn.grid(row=0, column=1, padx=5, pady=3, sticky="w")
+    # --- Artery buttons ---
+    artery_labels_frame = tk.LabelFrame(seg_frame, text="Arteries", font=("Segoe UI", 8), fg="#CC2222")
+    artery_labels_frame.grid(row=1, column=0, padx=4, pady=2, sticky="ew")
+    artery_labels_frame.grid_columnconfigure((0, 1), weight=1)
+    _artery_classes = [
+        ("CFA Loc 1", "CFA Scanning Location 1"),
+        ("CFA Loc 2", "CFA Scanning Location 2"),
+        ("DFA Loc 2", "DFA Scanning Location 2"),
+        ("FA Loc 2",  "FA Scanning Location 2"),
+        ("FA Loc 3",  "FA Scanning Location 3"),
+        ("PA Loc 4",  "PA Scanning Location 4"),
+    ]
+    for _ai, (_short, _full) in enumerate(_artery_classes):
+        _btn = ttk.Button(artery_labels_frame, text=_short, style="small.TButton",
+                          command=lambda lbl=_full: start_draw_for_class(lbl))
+        _btn.grid(row=_ai // 2, column=_ai % 2, padx=3, pady=2, sticky="ew")
+        _class_buttons[_full] = _btn
 
-    clear_all_btn = ttk.Button(seg_frame, text="Clear All", command=clear_all_annotations, style="small.TButton")
-    clear_all_btn.grid(row=0, column=2, padx=5, pady=3, sticky="w")
+    # --- Other buttons ---
+    other_labels_frame = tk.LabelFrame(seg_frame, text="Other", font=("Segoe UI", 8), fg="#666666")
+    other_labels_frame.grid(row=2, column=0, padx=4, pady=2, sticky="ew")
+    other_labels_frame.grid_columnconfigure((0, 1), weight=1)
+    for _oi, _full in enumerate(["Clot", "Other"]):
+        _btn = ttk.Button(other_labels_frame, text=_full, style="small.TButton",
+                          command=lambda lbl=_full: start_draw_for_class(lbl))
+        _btn.grid(row=0, column=_oi, padx=3, pady=2, sticky="ew")
+        _class_buttons[_full] = _btn
 
-    draw_hint = tk.Label(seg_frame, text="Left-click: add point | Right-click: close polygon", font=("Segoe UI", 7), fg="gray")
-    draw_hint.grid(row=1, column=0, columnspan=3, padx=5, pady=0, sticky="w")
+    # --- Action buttons row ---
+    _action_row = tk.Frame(seg_frame)
+    _action_row.grid(row=3, column=0, padx=4, pady=(2, 2), sticky="ew")
+    cancel_draw_btn = ttk.Button(_action_row, text="Cancel Drawing", command=_cancel_draw, style="small.TButton")
+    cancel_draw_btn.grid(row=0, column=0, padx=3, pady=2, sticky="w")
+    clear_frame_btn = ttk.Button(_action_row, text="Clear Frame", command=clear_frame_annotations, style="small.TButton")
+    clear_frame_btn.grid(row=0, column=1, padx=3, pady=2, sticky="w")
+    clear_all_btn = ttk.Button(_action_row, text="Clear All", command=clear_all_annotations, style="small.TButton")
+    clear_all_btn.grid(row=0, column=2, padx=3, pady=2, sticky="w")
+
+    draw_hint = tk.Label(seg_frame, text="Click class to draw | Right-click: close polygon", font=("Segoe UI", 7), fg="gray")
+    draw_hint.grid(row=4, column=0, padx=5, pady=(0, 3), sticky="w")
 
     # Annotation list for current frame
     ann_list_frame = tk.LabelFrame(annotations_tab_frame, text="Annotations list", font=("Segoe UI", 9))
@@ -2058,41 +2144,51 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
             # --- Polygon drawing event handlers ---
             def on_canvas_left_click(event):
-                global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_scale_x, annotation_scale_y
+                global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_scale_x, annotation_scale_y, annotation_current_label
                 if not annotation_drawing_mode:
                     return
+                # Determine draw color from current label's category
+                _category = SEG_MASK_TO_CLASS.get(annotation_current_label, "Other")
+                _draw_color = CLASS_CATEGORY_COLORS.get(_category, "#FF0000")
                 # Convert canvas coords to original image coords
                 orig_x = event.x / annotation_scale_x
                 orig_y = event.y / annotation_scale_y
                 annotation_current_polygon.append([orig_x, orig_y])
                 # Draw point marker
                 cid = img_label.create_oval(event.x - 3, event.y - 3, event.x + 3, event.y + 3,
-                                            fill="#FF0000", outline="#FF0000", tags="drawing")
+                                            fill=_draw_color, outline=_draw_color, tags="drawing")
                 annotation_canvas_ids.append(cid)
                 # Draw line to previous point
                 if len(annotation_current_polygon) > 1:
                     prev = annotation_current_polygon[-2]
                     px, py = prev[0] * annotation_scale_x, prev[1] * annotation_scale_y
                     cid = img_label.create_line(px, py, event.x, event.y,
-                                                fill="#FF0000", width=2, tags="drawing")
+                                                fill=_draw_color, width=2, tags="drawing")
                     annotation_canvas_ids.append(cid)
 
             def on_canvas_right_click(event):
                 """Close the current polygon and save it."""
-                global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids
+                global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_current_label
                 if not annotation_drawing_mode:
                     return
                 if len(annotation_current_polygon) < 3:
                     console_message("Need at least 3 points to close polygon", level="warning")
                     return
-                # Save the polygon
-                save_polygon_to_annotations(file_path, current_frame_index, annotation_current_polygon, label="polygon")
-                console_message(f"Polygon saved on frame {current_frame_index} with {len(annotation_current_polygon)} points", level="info")
+                # Save the polygon with the currently selected class label
+                _save_label = annotation_current_label if annotation_current_label else "polygon"
+                save_polygon_to_annotations(file_path, current_frame_index, annotation_current_polygon, label=_save_label)
+                console_message(f"Polygon saved on frame {current_frame_index} — class: '{_save_label}' — {len(annotation_current_polygon)} pts", level="info")
                 # Clean up temp drawing items
                 for cid in annotation_canvas_ids:
                     img_label.delete(cid)
                 annotation_canvas_ids = []
                 annotation_current_polygon = []
+                # Reset button reliefs
+                for _b in _class_buttons.values():
+                    _b.config(relief="raised")
+                annotation_drawing_mode = False
+                annotation_current_label = ""
+                img_label.config(cursor="")
                 # Redraw saved annotations
                 draw_annotations_on_canvas(img_label, file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
                 update_annotation_list()
@@ -2242,9 +2338,11 @@ def draw_annotations_on_canvas(canvas, file_path, frame_index, scale_x, scale_y)
     data = global_annotations.get(file_path, {})
     frame_key = str(frame_index)
     polygons = data.get("frames", {}).get(frame_key, [])
-    colors = ["#00FF00", "#FF00FF", "#FFFF00", "#00FFFF", "#FF8000", "#8000FF"]
+    _fallback_colors = ["#00FF00", "#FF00FF", "#FFFF00", "#00FFFF", "#FF8000", "#8000FF"]
     for i, poly in enumerate(polygons):
-        color = colors[i % len(colors)]
+        # Color by category; fall back to cycling palette for legacy / unknown labels
+        _cat = SEG_MASK_TO_CLASS.get(poly.get("label", ""), None)
+        color = CLASS_CATEGORY_COLORS.get(_cat, _fallback_colors[i % len(_fallback_colors)]) if _cat else _fallback_colors[i % len(_fallback_colors)]
         pts = poly["points"]
         if len(pts) < 2:
             continue
@@ -2252,12 +2350,17 @@ def draw_annotations_on_canvas(canvas, file_path, frame_index, scale_x, scale_y)
         scaled = []
         for p in pts:
             scaled.extend([p[0] * scale_x, p[1] * scale_y])
-        # Close the polygon
+        # Draw filled outline and label
         canvas.create_polygon(scaled, outline=color, fill="", width=2, tags="annotation")
         # Draw point markers
         for p in pts:
             sx, sy = p[0] * scale_x, p[1] * scale_y
             canvas.create_oval(sx - 3, sy - 3, sx + 3, sy + 3, fill=color, outline=color, tags="annotation")
+        # Draw label text near the first point
+        if pts:
+            lx, ly = pts[0][0] * scale_x, pts[0][1] * scale_y
+            canvas.create_text(lx + 5, ly - 8, text=poly.get("label", ""), fill=color,
+                               font=("Segoe UI", 7), anchor="w", tags="annotation")
 
 
 # ---------- Darwin V7 JSON v2.0 format support ----------
