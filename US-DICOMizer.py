@@ -113,6 +113,7 @@ output_path = {files_output_path}
 show_imageJ_button = no
 convert_all_to_jpeg = yes
 patient_s_ID = keep
+annotation_format = LabelMe
 
 [crop_area]
 x0_value = 10
@@ -342,13 +343,13 @@ pip install numpy<2
 '''
 
 def settings():
-    global output_path, output_path_text, compression_entry, x0_entry, y0_entry, x1_entry, y1_entry
+    global output_path, output_path_text, compression_entry, ann_fmt_settings_var, x0_entry, y0_entry, x1_entry, y1_entry
     #logger = logging.getLogger('dicom_app')  # Ανάκτηση του ίδιου logger
     
     settings_window = tk.Toplevel(root)
     settings_window.title("Settings")
     settings_window.iconbitmap(resource_path('icon.ico'))
-    settings_window.geometry("450x450")#Πλάτος x Ύψος
+    settings_window.geometry("450x510")#Πλάτος x Ύψος
 
     try:
         compression_level = config['settings'].get('compression_level', '100')#ανάγνωση τιμής απο το ini αρχείο , εκχόρηση default value
@@ -381,6 +382,13 @@ def settings():
         output_path_text.grid(column=0, row=2, columnspan=2, sticky="nsew")
         output_path_text.insert(tk.END, output_path)
         output_path_text.configure(state='disabled')
+
+        ann_fmt_label = ttk.Label(settings_01, text="Annotation export format:")
+        ann_fmt_label.grid(column=0, row=3, sticky="w", pady=(6, 0))
+        ann_fmt_settings_var = tk.StringVar(value=config['settings'].get('annotation_format', 'LabelMe'))
+        ann_fmt_combo = ttk.Combobox(settings_01, textvariable=ann_fmt_settings_var,
+                                     values=["LabelMe", "Darwin V7"], state="readonly", width=12)
+        ann_fmt_combo.grid(column=1, row=3, sticky="w", pady=(6, 0))
 
         '''
         settings_02 = ttk.LabelFrame(settings_window, text="Custom crop area")
@@ -505,7 +513,7 @@ def select_output_folder():
 
        
 def save_settings(settings_window):
-    global config, compression_entry, output_path #,x0_entry, y0_entry, x1_entry, y1_entry
+    global config, compression_entry, ann_fmt_settings_var, output_path #,x0_entry, y0_entry, x1_entry, y1_entry
     
     compression_level = compression_entry.get()
     #output_path = output_path
@@ -523,6 +531,7 @@ def save_settings(settings_window):
     #ενημέρωση των τιμών στο config object
     config['settings']['compression_level'] = compression_level
     config['settings']['output_path'] = output_path
+    config['settings']['annotation_format'] = ann_fmt_settings_var.get()
 
     '''
     config['crop_area']['x0_value'] = x0_value
@@ -3067,19 +3076,20 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
             ann_data = global_annotations[file_path]
             has_annotations = (ann_data["classification"]["grading"] or ann_data["classification"]["dvt"] or ann_data["frames"])
             if has_annotations:
-                # LabelMe format
-                json_filename = output_filename.replace(".dcm", ".json")
-                export_annotations_json(file_path, json_filename, crop_width, crop_height)
-                console_message(f"Annotations exported (LabelMe): {json_filename}", level="debug")
-                # Darwin V7 format
-                darwin_filename = output_filename.replace(".dcm", "_darwin.json")
-                fc = 1
-                try:
-                    fc = int(getattr(ds, 'NumberOfFrames', 1) or 1)
-                except Exception:
-                    pass
-                export_annotations_darwin_json(file_path, darwin_filename, crop_width, crop_height, fc)
-                console_message(f"Annotations exported (Darwin): {darwin_filename}", level="debug")
+                _ann_fmt = config['settings'].get('annotation_format', 'LabelMe')
+                if _ann_fmt == 'Darwin V7':
+                    darwin_filename = output_filename.replace(".dcm", "_darwin.json")
+                    fc = 1
+                    try:
+                        fc = int(getattr(ds, 'NumberOfFrames', 1) or 1)
+                    except Exception:
+                        pass
+                    export_annotations_darwin_json(file_path, darwin_filename, crop_width, crop_height, fc)
+                    console_message(f"Annotations exported (Darwin V7): {darwin_filename}", level="debug")
+                else:
+                    json_filename = output_filename.replace(".dcm", ".json")
+                    export_annotations_json(file_path, json_filename, crop_width, crop_height)
+                    console_message(f"Annotations exported (LabelMe): {json_filename}", level="debug")
 
         #print(f"New cropped file saved as: {output_filename}")
         console_message(f"New cropped file saved as: {output_filename}",level="debug")
@@ -3107,7 +3117,40 @@ def zip_folder():
         zipped_file = os.path.join(save_zip_to, files_folder)
         zipped_file = os.path.normpath(zipped_file)
         #print("Folder to zip: ", folder_to_zip)
-        
+
+        # Flush any annotations that were added/edited after anonymization
+        # (e.g. by previewing from the Anonymized treeview) and not yet on disk.
+        for ann_file_path, ann_data in global_annotations.items():
+            has_annotations = (ann_data["classification"]["grading"] or
+                               ann_data["classification"]["dvt"] or
+                               ann_data["frames"])
+            if not has_annotations:
+                continue
+            # Only handle files that actually live inside output_directory2
+            try:
+                norm_ann = os.path.normpath(ann_file_path)
+                norm_out = os.path.normpath(output_directory2)
+                if not norm_ann.startswith(norm_out + os.sep):
+                    continue
+            except Exception:
+                continue
+            _ann_fmt = config['settings'].get('annotation_format', 'LabelMe')
+            if _ann_fmt == 'Darwin V7':
+                darwin_path = os.path.splitext(ann_file_path)[0] + "_darwin.json"
+                if not os.path.isfile(darwin_path):
+                    try:
+                        _ds = pydicom.dcmread(ann_file_path, stop_before_pixels=True)
+                        _fc = int(getattr(_ds, 'NumberOfFrames', 1) or 1)
+                    except Exception:
+                        _fc = 1
+                    export_annotations_darwin_json(ann_file_path, darwin_path, frame_count=_fc)
+                    console_message(f"Flushed Darwin V7 annotations: {darwin_path}", level="debug")
+            else:
+                json_path = os.path.splitext(ann_file_path)[0] + ".json"
+                if not os.path.isfile(json_path):
+                    export_annotations_json(ann_file_path, json_path)
+                    console_message(f"Flushed LabelMe annotations: {json_path}", level="debug")
+
         shutil.make_archive(zipped_file, 'zip', output_directory2)
         
         console_message(f"created zip file: {zipped_file}.zip", level="debug")
