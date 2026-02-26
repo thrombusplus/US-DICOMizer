@@ -14,6 +14,13 @@ import sys
 from ctypes import windll
 import configparser
 import random
+
+
+def resource_path(relative_path):
+    """Return the absolute path to a resource, works for dev and PyInstaller --onefile."""
+    base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative_path)
+
 import re
 import logging
 from datetime import datetime
@@ -289,7 +296,7 @@ def settings():
     
     settings_window = tk.Toplevel(root)
     settings_window.title("Settings")
-    settings_window.iconbitmap(r'icon.ico')
+    settings_window.iconbitmap(resource_path('icon.ico'))
     settings_window.geometry("450x450")#Πλάτος x Ύψος
 
     try:
@@ -2428,9 +2435,7 @@ def OnDoubleClick(event):
 
 def open_manual():
     filename = "US-DICOMizer_manual.pdf"
-    root_dir = os.path.dirname(os.path.abspath(__file__))
-    pdf_path = os.path.join(root_dir, filename)
-    console_message(f"root_dir: {root_dir}", level="debug")
+    pdf_path = resource_path(filename)
     console_message(f"pdf_path: {pdf_path}", level="debug")
 
     if not os.path.isfile(pdf_path):
@@ -2477,7 +2482,7 @@ def about():
     
     # Load and Display Logo
     try:
-        image = Image.open("Logo_Blue_Green_small.png")
+        image = Image.open(resource_path("Logo_Blue_Green_small.png"))
         logo = ImageTk.PhotoImage(image)
         logo_label = tk.Label(about_frame, image=logo)
         logo_label.image = logo  # Keep a reference
@@ -2492,7 +2497,7 @@ windll.shcore.SetProcessDpiAwareness(0)
 #Δημιουργία του βασικού παραθύρου της εφαρμογής
 root = tk.Tk()
 root.title("US-DICOMizer")
-root.iconbitmap(r'icon.ico')
+root.iconbitmap(resource_path('icon.ico'))
 screen_width= root.winfo_screenwidth() 
 screen_height= root.winfo_screenheight()
 #setting tkinter window size
