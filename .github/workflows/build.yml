@@ -26,9 +26,17 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Write VERSION file from release tag
+        if: github.event_name == 'release'
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag -replace '^v',''
+          Set-Content -Path VERSION -Value $ver -NoNewline
+          Write-Host "VERSION set to $ver"
+
       - name: Build executable with PyInstaller
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "US-DICOMizer" --icon=icon.ico --add-data "icon.ico;." --add-data "Logo_Blue_Green_small.png;." --add-data "US-DICOMizer_manual.pdf;." --hidden-import pydicom --hidden-import pydicom.pixels --hidden-import pydicom.pixels.utils --hidden-import pydicom.pixels.encoders --hidden-import pydicom.pixels.encoders.gdcm --hidden-import pydicom.pixels.encoders.pylibjpeg --hidden-import pydicom.encaps --hidden-import pydicom.uid --hidden-import pydicom.dataelem --hidden-import tkhtmlview --hidden-import tkhtmlview.html_parser --hidden-import tkhtmlview.utils US-DICOMizer.py
+          pyinstaller --noconfirm --onefile --windowed --name "US-DICOMizer" --icon=icon.ico --add-data "icon.ico;." --add-data "Logo_Blue_Green_small.png;." --add-data "US-DICOMizer_manual.pdf;." --add-data "VERSION;." --hidden-import pydicom --hidden-import pydicom.pixels --hidden-import pydicom.pixels.utils --hidden-import pydicom.pixels.encoders --hidden-import pydicom.pixels.encoders.gdcm --hidden-import pydicom.pixels.encoders.pylibjpeg --hidden-import pydicom.encaps --hidden-import pydicom.uid --hidden-import pydicom.dataelem --hidden-import tkhtmlview --hidden-import tkhtmlview.html_parser --hidden-import tkhtmlview.utils US-DICOMizer.py
 
       - name: Package Release
         run: Compress-Archive -Path dist/US-DICOMizer.exe -DestinationPath "US-DICOMizer-Windows-$env:GITHUB_REF_NAME.zip"
