@@ -9,6 +9,8 @@ import webbrowser
 import shutil
 import subprocess
 from threading import Thread
+import urllib.request
+import urllib.error
 #import threading
 import sys
 from ctypes import windll
@@ -20,6 +22,66 @@ def resource_path(relative_path):
     """Return the absolute path to a resource, works for dev and PyInstaller --onefile."""
     base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, relative_path)
+
+
+def _read_version():
+    """Read the application version from the bundled VERSION file."""
+    version_path = resource_path("VERSION")
+    try:
+        with open(version_path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "0.0"
+
+
+GITHUB_RELEASES_API = "https://api.github.com/repos/thrombusplus/US-DICOMizer/releases/latest"
+
+
+def _parse_version(v):
+    """Parse a version string like '4.16' into a tuple of ints for comparison."""
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except (ValueError, AttributeError):
+        return (0,)
+
+
+def _show_update_dialog(latest_tag, release_url):
+    """Show a dialog (on the main thread) informing the user of a new release."""
+    if messagebox.askyesno(
+        "Update Available",
+        f"A new version ({latest_tag}) is available.\n\nWould you like to open the download page?",
+    ):
+        webbrowser.open(release_url)
+
+
+def check_for_updates():
+    """Background thread: compare latest GitHub release tag against the running version."""
+    try:
+        req = urllib.request.Request(
+            GITHUB_RELEASES_API,
+            headers={"User-Agent": "US-DICOMizer"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+
+        latest_tag = data.get("tag_name", "")          # e.g. "v4.17"
+        release_url = data.get("html_url", GITHUB_RELEASES_API)
+
+        if not latest_tag:
+            return
+
+        latest_clean = latest_tag.lstrip("v")
+        current_tuple = _parse_version(version)
+        latest_tuple  = _parse_version(latest_clean)
+
+        if latest_tuple > current_tuple:
+            # Schedule the dialog on the main tkinter thread
+            tag = latest_tag
+            url = release_url
+            root.after(0, lambda: _show_update_dialog(tag, url))
+    except Exception:
+        # Network/parse errors are silently ignored
+        pass
 
 import re
 import logging
@@ -34,7 +96,7 @@ added auto bounding for cropping
 minor changes at logs output
 '''
 
-version = "4.16"
+version = _read_version()
 temp_output_dir = None
 zcount = 0
 
@@ -3338,11 +3400,13 @@ def about():
     title_label.grid(row=0, column=0, pady=5, sticky="n")
 
     # HTML Content with links
-    html_content = """
+    html_content = f"""
     <div style='text-align: center; font-family: "Segoe UI", sans-serif;'>
-        <p style='font-size: 11px;'>Version: v4.16
-        <br>Release Date: 27 May 2025
-        <br>Developer: <a href='mailto:pechlivanis.d@gmail.com'>Dimitrios Pechlivanis</a></p>
+        <p style='font-size: 11px;'>Version: {version}
+        <br>Release Date: 27 May 2025</p>
+        <p style='font-size: 11px;'><b>Developers:</b>
+        <br>Current: <a href='https://nporto.com'>Nick Portokallidis</a>
+        <br>Past: <a href='mailto:pechlivanis.d@gmail.com'>Dimitrios Pechlivanis</a></p>
         <p style='font-size: 8px;'>The source code of this app is available<br>
         on <a href='https://github.com/thrombusplus/US-DICOMizer'>GitHub</a> 
         and has also been<br>
@@ -3703,4 +3767,5 @@ root.bind("<Prior>",lambda event: move_up())
 root.bind("<Next>",lambda event: move_down())
 
 logger.info('loaded all functions successfully')
+Thread(target=check_for_updates, daemon=True).start()
 root.mainloop()

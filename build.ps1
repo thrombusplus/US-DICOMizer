@@ -21,6 +21,7 @@ pyinstaller --noconfirm --onefile --windowed `
     --add-data "icon.ico;." `
     --add-data "Logo_Blue_Green_small.png;." `
     --add-data "US-DICOMizer_manual.pdf;." `
+    --add-data "VERSION;." `
     --hidden-import pydicom `
     --hidden-import pydicom.pixels `
     --hidden-import pydicom.pixels.utils `
@@ -41,7 +42,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "==> Packaging..." -ForegroundColor Cyan
-$Version = (Select-String -Path "US-DICOMizer.py" -Pattern '^version\s*=\s*"(.*)"').Matches[0].Groups[1].Value
+$Version = (Get-Content -Path "VERSION" -Raw).Trim()
 $ZipName = "US-DICOMizer-Windows-v$Version.zip"
 Compress-Archive -Force -Path "dist\US-DICOMizer.exe" -DestinationPath $ZipName
 
