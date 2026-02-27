@@ -40,7 +40,8 @@ zcount = 0
 
 # ---------- Annotation state ----------
 # global_annotations[file_path] = {
-#     "classification": {"grading": "", "dvt": ""},
+#     "classification": {"dvt": ""},
+#     "frame_grading": {frame_index_str: "Grade X", ...},
 #     "frames": {
 #         frame_index: [
 #             {"label": str, "points": [[x,y], ...]},
@@ -57,6 +58,7 @@ annotation_scale_y = 1.0
 annotation_current_file = None         # file_path of the file being previewed
 annotation_notebook = None             # ttk.Notebook for Attributes/Annotations tabs
 annotation_current_label = ""          # class label currently selected for drawing
+_frame_grading_refresh_fn = None       # callable set by preview_file to refresh per-frame grading combo
 
 # ---------- Segmentation class definitions ----------
 SEG_MASK_TO_CLASS = {
@@ -1118,6 +1120,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     annotation_current_polygon = []
     annotation_canvas_ids = []
     annotation_current_file = file_path
+    current_frame_index = 0
     ds = pydicom.dcmread(file_path) #ανάγνωση του αρχείου DICOM
     num_frames = get_nr_frames(ds)
 
@@ -1157,28 +1160,50 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     class_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
     class_frame.grid_columnconfigure(1, weight=1)
 
-    tk.Label(class_frame, text="Image Grading:", font=("Segoe UI", 8)).grid(row=0, column=0, padx=5, pady=2, sticky="w")
-    grading_var = tk.StringVar(value=ann_data["classification"]["grading"])
-    grading_combo = ttk.Combobox(class_frame, textvariable=grading_var, width=14, state="readonly",
-                                 values=["", "Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5"])
-    grading_combo.grid(row=0, column=1, padx=5, pady=2, sticky="w")
-
-    tk.Label(class_frame, text="DVT Status:", font=("Segoe UI", 8)).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+    tk.Label(class_frame, text="DVT Status:", font=("Segoe UI", 8)).grid(row=0, column=0, padx=5, pady=2, sticky="w")
     dvt_var = tk.StringVar(value=ann_data["classification"]["dvt"])
     dvt_combo = ttk.Combobox(class_frame, textvariable=dvt_var, width=14, state="readonly",
                               values=["", "DVT", "NO DVT"])
-    dvt_combo.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+    dvt_combo.grid(row=0, column=1, padx=5, pady=2, sticky="w")
 
     def on_classification_change(event=None):
-        save_classification_to_annotations(file_path, grading_var.get(), dvt_var.get())
-        console_message(f"Classification saved: grading={grading_var.get()}, dvt={dvt_var.get()}", level="info")
+        save_classification_to_annotations(file_path, dvt_var.get())
+        console_message(f"Classification saved: dvt={dvt_var.get()}", level="info")
 
-    grading_combo.bind("<<ComboboxSelected>>", on_classification_change)
     dvt_combo.bind("<<ComboboxSelected>>", on_classification_change)
+
+    # --- ACEP Grading (per frame) ---
+    frame_grading_frame = tk.LabelFrame(annotations_tab_frame, text="ACEP Grading (per frame)", font=("Segoe UI", 9))
+    frame_grading_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+    frame_grading_frame.grid_columnconfigure(1, weight=1)
+
+    tk.Label(frame_grading_frame, text="Frame Grade:", font=("Segoe UI", 8)).grid(row=0, column=0, padx=5, pady=2, sticky="w")
+    _init_fg = ann_data["frame_grading"].get(str(current_frame_index), "")
+    frame_grading_var = tk.StringVar(value=_init_fg)
+    frame_grading_combo = ttk.Combobox(frame_grading_frame, textvariable=frame_grading_var, width=14, state="readonly",
+                                       values=["", "Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5"])
+    frame_grading_combo.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+    frame_grade_lbl = tk.Label(frame_grading_frame, text=f"Frame: {current_frame_index}", font=("Segoe UI", 7), fg="gray")
+    frame_grade_lbl.grid(row=0, column=2, padx=5, pady=2, sticky="w")
+
+    def on_frame_grading_change(event=None):
+        save_frame_grading_to_annotations(file_path, current_frame_index, frame_grading_var.get())
+        console_message(f"ACEP Grading saved for frame {current_frame_index}: {frame_grading_var.get()}", level="info")
+
+    frame_grading_combo.bind("<<ComboboxSelected>>", on_frame_grading_change)
+
+    def refresh_frame_grading_ui():
+        """Refresh the per-frame grading combo to reflect the current frame."""
+        _fg = get_annotation_data(file_path)["frame_grading"].get(str(current_frame_index), "")
+        frame_grading_var.set(_fg)
+        frame_grade_lbl.config(text=f"Frame: {current_frame_index}")
+
+    global _frame_grading_refresh_fn
+    _frame_grading_refresh_fn = refresh_frame_grading_ui
 
     # Segmentation section
     seg_frame = tk.LabelFrame(annotations_tab_frame, text="Polygon Segmentation (per frame)", font=("Segoe UI", 9))
-    seg_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+    seg_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
     seg_frame.grid_columnconfigure(0, weight=1)
 
     # Keep track of all class buttons so we can reset their relief
@@ -1195,7 +1220,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         annotation_canvas_ids = []
         img_label.config(cursor="")
         for btn in _class_buttons.values():
-            btn.config(relief="raised")
+            btn.state(["!pressed", "!disabled"])
 
     def start_draw_for_class(label):
         """Activate drawing mode for the given class label."""
@@ -1207,7 +1232,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         img_label.config(cursor="crosshair")
         # Highlight the active button
         if label in _class_buttons:
-            _class_buttons[label].config(relief="sunken")
+            _class_buttons[label].state(["pressed"])
 
     def clear_frame_annotations():
         global current_frame_index
@@ -1286,7 +1311,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
     # Annotation list for current frame
     ann_list_frame = tk.LabelFrame(annotations_tab_frame, text="Annotations list", font=("Segoe UI", 9))
-    ann_list_frame.grid(row=2, column=0, padx=5, pady=5, sticky="nsew")
+    ann_list_frame.grid(row=3, column=0, padx=5, pady=5, sticky="nsew")
     ann_list_frame.grid_columnconfigure(0, weight=1)
     ann_list_frame.grid_rowconfigure(0, weight=1)
 
@@ -1330,7 +1355,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
     # Export / Import annotations for this file
     io_frame = tk.Frame(annotations_tab_frame)
-    io_frame.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
+    io_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")
 
     # Format selector
     fmt_label = tk.Label(io_frame, text="Format:")
@@ -1372,8 +1397,8 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             detected = detect_and_import_annotations(in_path, file_path)
             # Refresh UI
             ann_data_refreshed = get_annotation_data(file_path)
-            grading_var.set(ann_data_refreshed["classification"]["grading"])
             dvt_var.set(ann_data_refreshed["classification"]["dvt"])
+            refresh_frame_grading_ui()
             update_annotation_list()
             draw_annotations_on_canvas(img_label, file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
             fmt_name = "Darwin V7" if detected == "darwin" else "LabelMe"
@@ -1523,7 +1548,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         sel_tag_frame.grid_rowconfigure(1, weight=1)
         sel_tag_frame.grid_columnconfigure(0, weight=1)
 
-        web_link_str = config.get("tags_link", "tags_link")
+        web_link_str = config.get("tags_link", "tags_link", fallback="")
 
         select_tag_label = tk.Label(sel_tag_frame,
                                     text="Select tag:", font=("Segoe UI", 8, "underline"),
@@ -1531,6 +1556,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         select_tag_label.grid(row=0, column=0, padx=5, pady=0)
         select_tag_label.bind("<Button-1>", lambda e: open_web_link(web_link_str))
 
+        tag_combobox = None
         try:
             #διαβάζω τις τιμές απο το settings.ini και τις μετατρέπω σε λίστα
             tag_values_str = config.get("tag_values", "tag_values")
@@ -2081,6 +2107,8 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                                            
         #συνάρτηση για ενημέρωση του tag στο Treeview
         def update_tag(event,  treeview, selected_item):
+            if tag_combobox is None:
+                return
             new_tag = tag_combobox.get()
             current_values = treeview.item(selected_item, "values")
             #print(current_values)
@@ -2098,7 +2126,8 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             '''
 
         #Σύνδεση του Combobox με την αλλαγή
-        tag_combobox.bind("<<ComboboxSelected>>", lambda event: update_tag(event, treeview, selected_item))
+        if tag_combobox is not None:
+            tag_combobox.bind("<<ComboboxSelected>>", lambda event: update_tag(event, treeview, selected_item))
             
     #έλεγχος αν το αρχείο DICOM περιέχει δεδομένα εικόνας
     if 'PixelData' in ds:
@@ -2195,7 +2224,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 annotation_current_polygon = []
                 # Reset button reliefs
                 for _b in _class_buttons.values():
-                    _b.config(relief="raised")
+                    _b.state(["!pressed"])
                 annotation_drawing_mode = False
                 annotation_current_label = ""
                 img_label.config(cursor="")
@@ -2271,9 +2300,13 @@ def get_annotation_data(file_path):
     global global_annotations
     if file_path not in global_annotations:
         global_annotations[file_path] = {
-            "classification": {"grading": "", "dvt": ""},
-            "frames": {}
+            "classification": {"dvt": ""},
+            "frames": {},
+            "frame_grading": {}
         }
+    # ensure frame_grading key exists in older in-memory entries
+    if "frame_grading" not in global_annotations[file_path]:
+        global_annotations[file_path]["frame_grading"] = {}
     return global_annotations[file_path]
 
 def save_polygon_to_annotations(file_path, frame_index, points, label="polygon"):
@@ -2287,11 +2320,19 @@ def save_polygon_to_annotations(file_path, frame_index, points, label="polygon")
         "points": points
     })
 
-def save_classification_to_annotations(file_path, grading, dvt):
+def save_classification_to_annotations(file_path, dvt):
     """Save classification labels for the file."""
     data = get_annotation_data(file_path)
-    data["classification"]["grading"] = grading
     data["classification"]["dvt"] = dvt
+
+def save_frame_grading_to_annotations(file_path, frame_index, grading):
+    """Save the ACEP Grading score for a specific frame."""
+    data = get_annotation_data(file_path)
+    frame_key = str(frame_index)
+    if grading:
+        data["frame_grading"][frame_key] = grading
+    elif frame_key in data["frame_grading"]:
+        del data["frame_grading"][frame_key]
 
 def export_annotations_json(file_path, output_json_path, image_width=0, image_height=0):
     """Export annotations for a single DICOM file in LabelMe-inspired JSON format."""
@@ -2323,9 +2364,9 @@ def export_annotations_json(file_path, output_json_path, image_width=0, image_he
         "version": "1.0",
         "flags": {
             "patient_id": patient_id,
-            "grading": data["classification"].get("grading", ""),
             "dvt": data["classification"].get("dvt", ""),
         },
+        "frame_gradings": dict(data.get("frame_grading", {})),
         "shapes": shapes,
         "imagePath": os.path.basename(output_json_path).replace(".json", ".dcm"),
         "imageWidth": image_width,
@@ -2343,8 +2384,11 @@ def import_annotations_json(json_path, file_path):
         data = get_annotation_data(file_path)
         # Classification flags
         if "flags" in ann and isinstance(ann["flags"], dict):
-            data["classification"]["grading"] = ann["flags"].get("grading", "")
             data["classification"]["dvt"] = ann["flags"].get("dvt", "")
+        # Per-frame ACEP gradings
+        for fk, fg in ann.get("frame_gradings", {}).items():
+            if fg:
+                data["frame_grading"][str(fk)] = fg
         # Shapes -> frames
         for shape in ann.get("shapes", []):
             frame_key = str(shape.get("frame", 0))
@@ -2454,15 +2498,17 @@ def export_annotations_darwin_json(file_path, output_json_path, image_width=0, i
             annotations_list.append(polygon_entry)
 
     # --- Classification / tag annotations ---
-    grading = data["classification"].get("grading", "")
     dvt = data["classification"].get("dvt", "")
 
-    # Emit grading as a tag annotation (per-file, applied to frame 0)
-    if grading:
+    # Emit one ACEP Grading Score tag annotation per graded frame
+    for grading_frame_key, grading_value in data.get("frame_grading", {}).items():
+        if not grading_value:
+            continue
+        grading_frame_idx = int(grading_frame_key)
         annotations_list.append({
             "annotators": [],
             "frames": {
-                "0": {
+                grading_frame_key: {
                     "keyframe": True,
                     "tag": {}
                 }
@@ -2471,12 +2517,12 @@ def export_annotations_darwin_json(file_path, output_json_path, image_width=0, i
             "name": "ACEP Grading Score",
             "properties": [
                 {
-                    "frame_index": 0,
+                    "frame_index": grading_frame_idx,
                     "name": "ACEP Grading Score",
-                    "value": grading.replace("Grade ", "")  # "Grade 2" -> "2"
+                    "value": grading_value.replace("Grade ", "")  # "Grade 2" -> "2"
                 }
             ],
-            "ranges": [[0, 1]],
+            "ranges": [[grading_frame_idx, grading_frame_idx + 1]],
             "reviewers": [],
             "slot_names": ["0"],
             "updated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -2578,8 +2624,11 @@ def import_annotations_darwin_json(json_path, file_path):
                     prop_name = prop.get("name", "")
                     prop_value = prop.get("value", "")
                     if prop_name == "ACEP Grading Score":
-                        # Map "2" -> "Grade 2"
-                        data["classification"]["grading"] = f"Grade {prop_value}" if prop_value else ""
+                        # Map "2" -> "Grade 2", store per-frame
+                        frame_idx = prop.get("frame_index", 0)
+                        grading_str = f"Grade {prop_value}" if prop_value else ""
+                        if grading_str:
+                            data["frame_grading"][str(frame_idx)] = grading_str
                     elif prop_name == "DVT Status":
                         data["classification"]["dvt"] = prop_value
                 continue  # skip to next annotation (tag has no polygon)
@@ -2730,6 +2779,10 @@ def update_image_with_crop_area(frame_index, crop_x_start, crop_y_start, crop_x_
     if annotation_current_file:
         draw_annotations_on_canvas(img_label, annotation_current_file, current_frame_index, annotation_scale_x, annotation_scale_y)
 
+    # Refresh per-frame ACEP grading combo
+    if _frame_grading_refresh_fn:
+        _frame_grading_refresh_fn()
+
 
 #Συνάρτηση για ενημέρωση της εικόνας ανάλογα με το frame
 def update_image(frame_index):
@@ -2779,6 +2832,10 @@ def update_image(frame_index):
     # Draw saved annotations for this frame
     if annotation_current_file:
         draw_annotations_on_canvas(img_label, annotation_current_file, current_frame_index, annotation_scale_x, annotation_scale_y)
+
+    # Refresh per-frame ACEP grading combo
+    if _frame_grading_refresh_fn:
+        _frame_grading_refresh_fn()
 
 def anonymize_selected_files():
 
@@ -3100,7 +3157,7 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
         # Export annotation JSON alongside the DICOM file if annotations exist
         if file_path in global_annotations:
             ann_data = global_annotations[file_path]
-            has_annotations = (ann_data["classification"]["grading"] or ann_data["classification"]["dvt"] or ann_data["frames"])
+            has_annotations = (ann_data["classification"]["dvt"] or ann_data["frames"] or ann_data.get("frame_grading"))
             if has_annotations:
                 _ann_fmt = config['settings'].get('annotation_format', 'LabelMe')
                 if _ann_fmt == 'Darwin V7':
@@ -3147,9 +3204,9 @@ def zip_folder():
         # Flush any annotations that were added/edited after anonymization
         # (e.g. by previewing from the Anonymized treeview) and not yet on disk.
         for ann_file_path, ann_data in global_annotations.items():
-            has_annotations = (ann_data["classification"]["grading"] or
-                               ann_data["classification"]["dvt"] or
-                               ann_data["frames"])
+            has_annotations = (ann_data["classification"]["dvt"] or
+                               ann_data["frames"] or
+                               ann_data.get("frame_grading"))
             if not has_annotations:
                 continue
             # Only handle files that actually live inside output_directory2
