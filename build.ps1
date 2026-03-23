@@ -22,6 +22,7 @@ pyinstaller --noconfirm --onefile --windowed `
     --add-data "Logo_Blue_Green_small.png;." `
     --add-data "US-DICOMizer_manual.pdf;." `
     --add-data "VERSION;." `
+    --add-data "RELEASE_DATE;." `
     --hidden-import pydicom `
     --hidden-import pydicom.pixels `
     --hidden-import pydicom.pixels.utils `

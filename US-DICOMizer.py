@@ -34,6 +34,16 @@ def _read_version():
         return "0.0"
 
 
+def _read_release_date():
+    """Read the release date from the bundled RELEASE_DATE file."""
+    release_date_path = resource_path("RELEASE_DATE")
+    try:
+        with open(release_date_path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "Unknown"
+
+
 GITHUB_RELEASES_API = "https://api.github.com/repos/thrombusplus/US-DICOMizer/releases/latest"
 
 
@@ -97,6 +107,7 @@ minor changes at logs output
 '''
 
 version = _read_version()
+release_date = _read_release_date()
 temp_output_dir = None
 zcount = 0
 
@@ -3403,7 +3414,7 @@ def about():
     html_content = f"""
     <div style='text-align: center; font-family: "Segoe UI", sans-serif;'>
         <p style='font-size: 11px;'>Version: {version}
-        <br>Release Date: 27 May 2025</p>
+        <br>Release Date: {release_date}</p>
         <p style='font-size: 11px;'><b>Developers:</b>
         <br>Current: <a href='https://nporto.com'>Nick Portokallidis</a>
         <br>Past: <a href='mailto:pechlivanis.d@gmail.com'>Dimitrios Pechlivanis</a></p>
