@@ -21,13 +21,22 @@ import random
 from anonymized_filename_utils import (
     build_anonymized_filename as build_anonymized_filename_impl,
     COMPRESSIBILITY_LABEL_BY_VALUE,
+    THROMBOSIS_LABEL_BY_VALUE,
+    build_tag_display_lookup,
     compressibility_label_to_value,
     compressibility_value_to_label,
-    encode_compressibility_code,
-    encode_dvt_code,
-    encode_review_code,
     looks_anonymized_filename,
     parse_anonymized_filename as parse_anonymized_filename_impl,
+    tag_value_to_display_label,
+    thrombosis_label_to_value,
+    thrombosis_value_to_label,
+)
+from annotation_metadata_utils import (
+    ensure_annotation_schema as ensure_annotation_schema_impl,
+    export_darwin_annotation,
+    export_labelme_annotation,
+    import_darwin_annotation,
+    import_labelme_annotation,
 )
 
 
@@ -127,9 +136,12 @@ zcount = 0
 # ---------- Annotation state ----------
 # global_annotations[file_path] = {
 #     "classification": {
-#         "dvt": "",
+#         "thrombosis": "",
 #         "compressibility": "",
-#         "review_status": {"reviewed": False, "timestamp": ""}
+#         "_reviewed": False,
+#         "_reviewed_timestamp": "",
+#         "protocol_deviation": False,
+#         "protocol_deviation_notes": ""
 #     },
 #     "frame_grading": {frame_index_str: "Grade X", ...},
 #     "frames": {
@@ -157,19 +169,35 @@ ANONYMIZED_ROW_TAG = "anonymized_file"
 # ---------- Segmentation class definitions ----------
 SEG_MASK_TO_CLASS = {
     # --- Veins (various scanning locations) ---
-    "CFV Scanning Location 1": "Vein",    # Common Femoral Vein
-    "CFV Scanning Location 2": "Vein",
-    "GSV Scanning Location 2": "Vein",    # Great Saphenous Vein
-    "FV Scanning Location 3": "Vein",     # Femoral Vein
-    "PV Scanning Location 4": "Vein",     # Popliteal Vein
+    "CFV # 1": "Vein",    # Common Femoral Vein
+    "CFV # 2": "Vein",
+    "GSV # 2": "Vein",    # Great Saphenous Vein
+    "FV # 3": "Vein",     # Femoral Vein
+    "PV # 4": "Vein",     # Popliteal Vein
     # --- Arteries (various scanning locations) ---
-    "CFA Scanning Location 1": "Artery",  # Common Femoral Artery
-    "CFA Scanning Location 2": "Artery",
-    "DFA Scanning Location 2": "Artery",  # Deep Femoral Artery
-    "FA Scanning Location 2": "Artery",   # Femoral Artery
-    "FA Scanning Location 3": "Artery",
-    "PA Scanning Location 4": "Artery",   # Popliteal Artery
+    "CFA # 1": "Artery",  # Common Femoral Artery
+    "CFA # 2": "Artery",
+    "DFA # 2": "Artery",  # Deep Femoral Artery
+    "FA # 2": "Artery",   # Femoral Artery
+    "FA # 3": "Artery",
+    "PA # 4": "Artery",   # Popliteal Artery
     # --- Other classes ---
+    "Clot": "Clot",
+    "Other": "Other",
+}
+
+SEGMENTATION_LABEL_DISPLAY = {
+    "CFV # 1": "Common Femoral Vein # 1",
+    "CFV # 2": "Common Femoral Vein # 2",
+    "GSV # 2": "Great Saphenous Vein # 2",
+    "FV # 3": "Femoral Vein # 3",
+    "PV # 4": "Popliteal Vein # 4",
+    "CFA # 1": "Common Femoral Artery # 1",
+    "CFA # 2": "Common Femoral Artery # 2",
+    "DFA # 2": "Deep Femoral Artery # 2",
+    "FA # 2": "Femoral Artery # 2",
+    "FA # 3": "Femoral Artery # 3",
+    "PA # 4": "Popliteal Artery # 4",
     "Clot": "Clot",
     "Other": "Other",
 }
@@ -210,6 +238,8 @@ show_imageJ_button = no
 convert_all_to_jpeg = yes
 patient_s_ID = keep
 annotation_format = Darwin V7
+clinician_name =
+clinician_email =
 
 [crop_area]
 x0_value = 10
@@ -361,7 +391,11 @@ try:
 except Exception as e:
     #console_message("error while reading settings.ini file", level="error")
     messagebox.showerror("Read settings.ini", f"{e}.")
-        
+
+if not config.has_section("settings"):
+    config["settings"] = {}
+config["settings"].setdefault("clinician_name", "")
+config["settings"].setdefault("clinician_email", "")
 
 
 #------------- INITIALIZE -------------
@@ -449,6 +483,23 @@ def get_runtime_tag_values(include_none=False):
     return tuple(tag for tag in tag_values if tag != "none")
 
 
+def get_runtime_tag_display_lookup(include_none=False):
+    return build_tag_display_lookup(get_runtime_tag_values(include_none=include_none))
+
+
+def get_tag_value_from_display(display_value, include_none=False):
+    lookup = get_runtime_tag_display_lookup(include_none=include_none)
+    return lookup.get(display_value, display_value)
+
+
+def get_clinician_identity():
+    settings_section = config["settings"] if config.has_section("settings") else {}
+    return (
+        str(settings_section.get("clinician_name", "")).strip(),
+        str(settings_section.get("clinician_email", "")).strip(),
+    )
+
+
 def parse_anonymized_filename(filename):
     return parse_anonymized_filename_impl(filename, get_runtime_tag_values(include_none=True))
 
@@ -457,47 +508,28 @@ def build_anonymized_filename(
     patient_id,
     file_no,
     tag,
-    dvt="",
+    thrombosis="",
     compressibility="",
     reviewed=False,
     include_classification=False,
     extension=".dcm",
+    dvt=None,
 ):
     return build_anonymized_filename_impl(
         patient_id=patient_id,
         file_no=file_no,
         tag=tag,
-        dvt=dvt,
+        thrombosis=thrombosis,
         compressibility=compressibility,
         reviewed=reviewed,
         include_classification=include_classification,
         extension=extension,
+        dvt=dvt,
     )
 
 
 def ensure_annotation_schema(data):
-    if "classification" not in data or not isinstance(data["classification"], dict):
-        data["classification"] = {}
-
-    classification = data["classification"]
-    classification.setdefault("dvt", "")
-    classification.setdefault("compressibility", "")
-
-    review_status = classification.get("review_status")
-    if not isinstance(review_status, dict):
-        review_status = {}
-        classification["review_status"] = review_status
-
-    review_status.setdefault("reviewed", False)
-    review_status.setdefault("timestamp", "")
-
-    if "frames" not in data or not isinstance(data["frames"], dict):
-        data["frames"] = {}
-
-    if "frame_grading" not in data or not isinstance(data["frame_grading"], dict):
-        data["frame_grading"] = {}
-
-    return data
+    return ensure_annotation_schema_impl(data)
 
 
 def get_patient_id_for_metadata(file_path):
@@ -523,15 +555,15 @@ def seed_annotations_from_filename(file_path):
 
     data = get_annotation_data(file_path)
     classification = data["classification"]
-    review_status = classification["review_status"]
 
-    if not classification.get("dvt"):
-        classification["dvt"] = parsed.get("dvt", "")
+    if not classification.get("thrombosis"):
+        classification["thrombosis"] = parsed.get("thrombosis", parsed.get("dvt", ""))
     if not classification.get("compressibility"):
         classification["compressibility"] = parsed.get("compressibility", "")
-    if not review_status.get("reviewed"):
-        review_status["reviewed"] = bool(parsed.get("reviewed", False))
-    review_status.setdefault("timestamp", "")
+    if not classification.get("_reviewed"):
+        classification["_reviewed"] = bool(parsed.get("reviewed", False))
+    if not classification.get("_reviewed"):
+        classification["_reviewed_timestamp"] = ""
 
     return parsed
 
@@ -718,7 +750,7 @@ def rename_anonymized_file(old_path, file_state):
         patient_id=parsed["patient_id"],
         file_no=parsed["file_no"],
         tag=target_tag,
-        dvt=file_state.get("dvt", ""),
+        thrombosis=file_state.get("thrombosis", file_state.get("dvt", "")),
         compressibility=file_state.get("compressibility", ""),
         reviewed=file_state.get("reviewed", False),
         include_classification=True,
@@ -773,20 +805,21 @@ def rename_anonymized_file(old_path, file_state):
 
 
 def settings():
-    global output_path, output_path_text, compression_entry, ann_fmt_settings_var, x0_entry, y0_entry, x1_entry, y1_entry
+    global output_path, output_path_text, compression_entry, ann_fmt_settings_var, clinician_name_entry, clinician_email_entry, x0_entry, y0_entry, x1_entry, y1_entry
     #logger = logging.getLogger('dicom_app')  # Ανάκτηση του ίδιου logger
     
     settings_window = tk.Toplevel(root)
     settings_window.title("Settings")
     settings_window.iconbitmap(resource_path('icon.ico'))
-    settings_window.geometry("450x510")#Πλάτος x Ύψος
+    settings_window.geometry("520x620")#Πλάτος x Ύψος
 
     try:
         compression_level = config['settings'].get('compression_level', '100')#ανάγνωση τιμής απο το ini αρχείο , εκχόρηση default value
         #output_path = config['settings'].get('output_path', 'C:/')
         
         settings_01 = ttk.Frame(settings_window)
-        settings_01.pack()
+        settings_01.pack(fill="x", padx=8, pady=8)
+        settings_01.grid_columnconfigure(1, weight=1)
 
         compression_level_label = ttk.Label(settings_01, text="Compression level (0-95): ")
         compression_level_label.grid(column=0, row=0, sticky="w")
@@ -819,6 +852,18 @@ def settings():
         ann_fmt_combo = ttk.Combobox(settings_01, textvariable=ann_fmt_settings_var,
                                      values=["LabelMe", "Darwin V7"], state="readonly", width=12)
         ann_fmt_combo.grid(column=1, row=3, sticky="w", pady=(6, 0))
+
+        clinician_name_label = ttk.Label(settings_01, text="Clinician name:")
+        clinician_name_label.grid(column=0, row=4, sticky="w", pady=(8, 0))
+        clinician_name_entry = ttk.Entry(settings_01, width=40)
+        clinician_name_entry.grid(column=1, row=4, sticky="ew", pady=(8, 0))
+        clinician_name_entry.insert(0, config['settings'].get('clinician_name', ''))
+
+        clinician_email_label = ttk.Label(settings_01, text="Clinician email:")
+        clinician_email_label.grid(column=0, row=5, sticky="w", pady=(6, 0))
+        clinician_email_entry = ttk.Entry(settings_01, width=40)
+        clinician_email_entry.grid(column=1, row=5, sticky="ew", pady=(6, 0))
+        clinician_email_entry.insert(0, config['settings'].get('clinician_email', ''))
 
         '''
         settings_02 = ttk.LabelFrame(settings_window, text="Custom crop area")
@@ -943,9 +988,11 @@ def select_output_folder():
 
        
 def save_settings(settings_window):
-    global config, compression_entry, ann_fmt_settings_var, output_path #,x0_entry, y0_entry, x1_entry, y1_entry
+    global config, compression_entry, ann_fmt_settings_var, clinician_name_entry, clinician_email_entry, output_path #,x0_entry, y0_entry, x1_entry, y1_entry
     
     compression_level = compression_entry.get()
+    clinician_name = clinician_name_entry.get().strip()
+    clinician_email = clinician_email_entry.get().strip()
     #output_path = output_path
 
     '''
@@ -962,6 +1009,8 @@ def save_settings(settings_window):
     config['settings']['compression_level'] = compression_level
     config['settings']['output_path'] = output_path
     config['settings']['annotation_format'] = ann_fmt_settings_var.get()
+    config['settings']['clinician_name'] = clinician_name
+    config['settings']['clinician_email'] = clinician_email
 
     '''
     config['crop_area']['x0_value'] = x0_value
@@ -1384,6 +1433,7 @@ def clear_anon_treeview():
     annotation_current_file_ref = None
     annotation_ui_enabled = False
     _frame_grading_refresh_fn = None
+    set_preview_frame_title()
         
     items = anonimyzed_files_treeview.get_children()
     for item in items:
@@ -1407,6 +1457,7 @@ def clear_anon_treeview2():
     annotation_current_file_ref = None
     annotation_ui_enabled = False
     _frame_grading_refresh_fn = None
+    set_preview_frame_title()
         
     items = anonimyzed_files_treeview.get_children()
     for item in items:
@@ -1419,8 +1470,6 @@ def clear_anon_treeview2():
     refresh_workflow_action_state()
 
 def preview_selected_file(treeview, source_stage):
-    frame_2.configure(text=f"Image preview from {source_stage}")
-
     #Λήψη του επιλεγμένου αρχείου από το TV που έχει δοθεί ως παράμετρος
     selected_item = treeview.focus()
     #επιτρέφει ('I001',) με len = 1
@@ -1445,7 +1494,8 @@ def preview_selected_file(treeview, source_stage):
 
     if source_stage != "Anonymized files" and is_file_ready_for_annotation(file_path):
         source_stage = "Anonymized files"
-        frame_2.configure(text=f"Image preview from {source_stage}")
+
+    set_preview_frame_title(file_path)
 
     #αν το preview δε προερχετε απο την ordeder list κανω την μεταβλητη
     #tag_value κενή για να μή σκάσει η συνάρηση preview_file, αλλιως ειναι none
@@ -1634,9 +1684,12 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
     filepath_label = None
     frame_grading_var = None
-    dvt_var = None
+    thrombosis_var = None
     compressibility_var = None
     review_var = None
+    protocol_deviation_var = None
+    protocol_deviation_notes_text = None
+    protocol_deviation_notes_label = None
     _class_buttons = {}
 
     def current_file_path():
@@ -1648,6 +1701,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         active_file = current_file_path()
         if filepath_label is None:
             return
+        set_preview_frame_title(active_file)
         filepath_label.configure(state="normal")
         filepath_label.delete("1.0", tk.END)
         filepath_label.insert(tk.END, active_file)
@@ -1667,95 +1721,203 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         class_frame = tk.LabelFrame(annotations_tab_frame, text="Classification (per file)", font=("Segoe UI", 9))
         class_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         class_frame.grid_columnconfigure(1, weight=1)
+        class_frame.grid_columnconfigure(3, weight=1)
 
-        tag_values_for_annotations = get_runtime_tag_values(include_none=True)
-        tag_editor_var = tk.StringVar(value=get_default_tag_for_file(current_file_path()))
+        tag_display_lookup = get_runtime_tag_display_lookup(include_none=True)
+        tag_editor_var = tk.StringVar(
+            value=tag_value_to_display_label(get_default_tag_for_file(current_file_path()))
+        )
 
         tk.Label(class_frame, text="Tag:", font=("Segoe UI", 8)).grid(row=0, column=0, padx=5, pady=2, sticky="w")
         tag_editor_combo = ttk.Combobox(
             class_frame,
             textvariable=tag_editor_var,
+            width=44,
+            state="readonly",
+            values=list(tag_display_lookup.keys()),
+        )
+        tag_editor_combo.grid(row=0, column=1, columnspan=3, padx=5, pady=2, sticky="ew")
+
+        tk.Label(class_frame, text="Thrombosis:", font=("Segoe UI", 8)).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+        thrombosis_var = tk.StringVar(
+            value=thrombosis_value_to_label(ann_data["classification"]["thrombosis"])
+        )
+        thrombosis_combo = ttk.Combobox(
+            class_frame,
+            textvariable=thrombosis_var,
             width=14,
             state="readonly",
-            values=tag_values_for_annotations,
+            values=list(THROMBOSIS_LABEL_BY_VALUE.values()),
         )
-        tag_editor_combo.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+        thrombosis_combo.grid(row=1, column=1, padx=5, pady=2, sticky="w")
 
-        tk.Label(class_frame, text="DVT Status:", font=("Segoe UI", 8)).grid(row=1, column=0, padx=5, pady=2, sticky="w")
-        dvt_var = tk.StringVar(value=ann_data["classification"]["dvt"])
-        dvt_combo = ttk.Combobox(class_frame, textvariable=dvt_var, width=14, state="readonly",
-                                  values=["", "DVT", "NO DVT"])
-        dvt_combo.grid(row=1, column=1, padx=5, pady=2, sticky="w")
-
-        tk.Label(class_frame, text="Compressibility:", font=("Segoe UI", 8)).grid(row=2, column=0, padx=5, pady=2, sticky="w")
+        tk.Label(class_frame, text="Compressibility:", font=("Segoe UI", 8)).grid(row=1, column=2, padx=5, pady=2, sticky="w")
         compressibility_var = tk.StringVar(
             value=compressibility_value_to_label(ann_data["classification"]["compressibility"])
         )
-        compressibility_combo = ttk.Combobox(class_frame, textvariable=compressibility_var, width=14, state="readonly",
-                                             values=list(COMPRESSIBILITY_LABEL_BY_VALUE.values()))
-        compressibility_combo.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+        compressibility_combo = ttk.Combobox(
+            class_frame,
+            textvariable=compressibility_var,
+            width=14,
+            state="readonly",
+            values=list(COMPRESSIBILITY_LABEL_BY_VALUE.values()),
+        )
+        compressibility_combo.grid(row=1, column=3, padx=5, pady=2, sticky="w")
 
-        tk.Label(class_frame, text="Review:", font=("Segoe UI", 8)).grid(row=3, column=0, padx=5, pady=2, sticky="w")
-        review_var = tk.BooleanVar(value=bool(ann_data["classification"]["review_status"]["reviewed"]))
+        tk.Label(class_frame, text="Review:", font=("Segoe UI", 8)).grid(row=2, column=0, padx=5, pady=2, sticky="w")
+        review_var = tk.BooleanVar(value=bool(ann_data["classification"]["_reviewed"]))
         review_checkbox = ttk.Checkbutton(class_frame, text="Reviewed", variable=review_var)
-        review_checkbox.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+        review_checkbox.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+
+        tk.Label(class_frame, text="Protocol Deviation:", font=("Segoe UI", 8)).grid(row=3, column=0, padx=5, pady=2, sticky="w")
+        protocol_deviation_var = tk.BooleanVar(
+            value=bool(ann_data["classification"]["protocol_deviation"])
+        )
+        protocol_deviation_checkbox = ttk.Checkbutton(
+            class_frame,
+            text="Video not suitable for current protocol",
+            variable=protocol_deviation_var,
+        )
+        protocol_deviation_checkbox.grid(row=3, column=1, columnspan=3, padx=5, pady=2, sticky="w")
+
+        protocol_deviation_notes_label = tk.Label(class_frame, text="Notes:", font=("Segoe UI", 8))
+        protocol_deviation_notes_label.grid(row=4, column=0, padx=5, pady=2, sticky="nw")
+        protocol_deviation_notes_text = tk.Text(class_frame, height=2, width=40, wrap=tk.WORD, font=("Segoe UI", 8))
+        protocol_deviation_notes_text.grid(row=4, column=1, columnspan=3, padx=5, pady=2, sticky="ew")
+        protocol_deviation_notes_text.insert(
+            tk.END,
+            ann_data["classification"]["protocol_deviation_notes"],
+        )
+
+        def get_protocol_deviation_notes():
+            if protocol_deviation_notes_text is None or not protocol_deviation_notes_text.winfo_exists():
+                return ""
+            return protocol_deviation_notes_text.get("1.0", tk.END).strip()
+
+        def set_protocol_deviation_notes(notes):
+            if protocol_deviation_notes_text is None or not protocol_deviation_notes_text.winfo_exists():
+                return
+            protocol_deviation_notes_text.delete("1.0", tk.END)
+            if notes:
+                protocol_deviation_notes_text.insert(tk.END, notes)
+
+        def toggle_protocol_deviation_notes(clear_if_disabled=False):
+            if (
+                protocol_deviation_notes_text is None
+                or protocol_deviation_notes_label is None
+                or not protocol_deviation_notes_text.winfo_exists()
+                or not protocol_deviation_notes_label.winfo_exists()
+            ):
+                return
+
+            enabled = bool(protocol_deviation_var.get())
+            if not enabled and clear_if_disabled:
+                protocol_deviation_notes_text.delete("1.0", tk.END)
+            if enabled:
+                protocol_deviation_notes_label.grid()
+                protocol_deviation_notes_text.grid()
+            else:
+                protocol_deviation_notes_label.grid_remove()
+                protocol_deviation_notes_text.grid_remove()
 
         def sync_classification_ui(active_file_path):
             refreshed = get_annotation_data(active_file_path)
-            tag_editor_var.set(get_default_tag_for_file(active_file_path))
-            dvt_var.set(refreshed["classification"]["dvt"])
+            tag_editor_var.set(tag_value_to_display_label(get_default_tag_for_file(active_file_path)))
+            thrombosis_var.set(
+                thrombosis_value_to_label(refreshed["classification"]["thrombosis"])
+            )
             compressibility_var.set(
                 compressibility_value_to_label(refreshed["classification"]["compressibility"])
             )
-            review_var.set(bool(refreshed["classification"]["review_status"]["reviewed"]))
+            review_var.set(bool(refreshed["classification"]["_reviewed"]))
+            protocol_deviation_var.set(bool(refreshed["classification"]["protocol_deviation"]))
+            set_protocol_deviation_notes(refreshed["classification"]["protocol_deviation_notes"])
+            toggle_protocol_deviation_notes()
 
-        def on_classification_change(event=None):
+        def persist_classification(rename_file=True, overwrite_sidecars=True):
             active_file_path = current_file_path()
             data = get_annotation_data(active_file_path)
             previous = {
                 "tag": get_default_tag_for_file(active_file_path),
-                "dvt": data["classification"].get("dvt", ""),
+                "thrombosis": data["classification"].get("thrombosis", ""),
                 "compressibility": data["classification"].get("compressibility", ""),
-                "reviewed": bool(data["classification"]["review_status"].get("reviewed", False)),
-                "timestamp": data["classification"]["review_status"].get("timestamp", ""),
+                "reviewed": bool(data["classification"].get("_reviewed", False)),
+                "timestamp": data["classification"].get("_reviewed_timestamp", ""),
+                "protocol_deviation": bool(data["classification"].get("protocol_deviation", False)),
+                "protocol_deviation_notes": data["classification"].get("protocol_deviation_notes", ""),
             }
 
             try:
+                raw_tag = get_tag_value_from_display(tag_editor_var.get(), include_none=True) or "none"
+                thrombosis_value = thrombosis_label_to_value(thrombosis_var.get())
+                compressibility_value = compressibility_label_to_value(compressibility_var.get())
                 save_classification_to_annotations(
                     active_file_path,
-                    dvt=dvt_var.get(),
-                    compressibility=compressibility_label_to_value(compressibility_var.get()),
+                    thrombosis=thrombosis_value,
+                    compressibility=compressibility_value,
                     reviewed=bool(review_var.get()),
+                    protocol_deviation=bool(protocol_deviation_var.get()),
+                    protocol_deviation_notes=get_protocol_deviation_notes(),
                 )
-                rename_anonymized_file(
-                    active_file_path,
-                    {
-                        "tag": tag_editor_var.get(),
-                        "dvt": dvt_var.get(),
-                        "compressibility": compressibility_label_to_value(compressibility_var.get()),
-                        "reviewed": bool(review_var.get()),
-                    },
-                )
+                if rename_file:
+                    renamed_path = rename_anonymized_file(
+                        active_file_path,
+                        {
+                            "tag": raw_tag,
+                            "thrombosis": thrombosis_value,
+                            "compressibility": compressibility_value,
+                            "reviewed": bool(review_var.get()),
+                        },
+                    )
+                    active_file_path = renamed_path
+                    refresh_filepath_display()
+                if overwrite_sidecars:
+                    overwrite_managed_sidecars(active_file_path)
                 refresh_filepath_display()
                 console_message(
-                    f"File metadata saved: tag={tag_editor_var.get()}, dvt={dvt_var.get()}, compressibility={compressibility_label_to_value(compressibility_var.get())}, reviewed={bool(review_var.get())}",
+                    f"File metadata saved: tag={raw_tag}, thrombosis={thrombosis_value}, compressibility={compressibility_value}, reviewed={bool(review_var.get())}, protocol_deviation={bool(protocol_deviation_var.get())}",
                     level="info",
                 )
             except Exception as exc:
                 restored = get_annotation_data(active_file_path)
-                restored["classification"]["dvt"] = previous["dvt"]
+                restored["classification"]["thrombosis"] = previous["thrombosis"]
                 restored["classification"]["compressibility"] = previous["compressibility"]
-                restored["classification"]["review_status"]["reviewed"] = previous["reviewed"]
-                restored["classification"]["review_status"]["timestamp"] = previous["timestamp"]
-                tag_editor_var.set(previous["tag"])
+                restored["classification"]["_reviewed"] = previous["reviewed"]
+                restored["classification"]["_reviewed_timestamp"] = previous["timestamp"]
+                restored["classification"]["protocol_deviation"] = previous["protocol_deviation"]
+                restored["classification"]["protocol_deviation_notes"] = previous["protocol_deviation_notes"]
+                tag_editor_var.set(tag_value_to_display_label(previous["tag"]))
                 sync_classification_ui(active_file_path)
                 messagebox.showerror("Rename failed", str(exc))
                 console_message(f"Failed to sync anonymized filename with classification: {exc}", level="error")
 
+        def on_classification_change(event=None):
+            toggle_protocol_deviation_notes(clear_if_disabled=not bool(protocol_deviation_var.get()))
+            persist_classification(rename_file=True, overwrite_sidecars=True)
+
+        def sync_protocol_deviation_notes_to_memory(event=None):
+            if protocol_deviation_notes_text is None or not protocol_deviation_notes_text.winfo_exists():
+                return
+            save_classification_to_annotations(
+                current_file_path(),
+                thrombosis=thrombosis_label_to_value(thrombosis_var.get()),
+                compressibility=compressibility_label_to_value(compressibility_var.get()),
+                reviewed=bool(review_var.get()),
+                protocol_deviation=bool(protocol_deviation_var.get()),
+                protocol_deviation_notes=get_protocol_deviation_notes(),
+            )
+
         tag_editor_combo.bind("<<ComboboxSelected>>", on_classification_change)
-        dvt_combo.bind("<<ComboboxSelected>>", on_classification_change)
+        thrombosis_combo.bind("<<ComboboxSelected>>", on_classification_change)
         compressibility_combo.bind("<<ComboboxSelected>>", on_classification_change)
         review_checkbox.configure(command=on_classification_change)
+        protocol_deviation_checkbox.configure(command=on_classification_change)
+        protocol_deviation_notes_text.bind("<KeyRelease>", sync_protocol_deviation_notes_to_memory)
+        protocol_deviation_notes_text.bind(
+            "<FocusOut>",
+            lambda event: persist_classification(rename_file=False, overwrite_sidecars=True),
+        )
+        toggle_protocol_deviation_notes()
 
         # --- ACEP Grading (per frame) ---
         frame_grading_frame = tk.LabelFrame(annotations_tab_frame, text="ACEP Grading (per frame)", font=("Segoe UI", 9))
@@ -1774,6 +1936,8 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         def on_frame_grading_change(event=None):
             active_file_path = current_file_path()
             save_frame_grading_to_annotations(active_file_path, current_frame_index, frame_grading_var.get())
+            update_segmentation_lock_ui()
+            overwrite_managed_sidecars(active_file_path)
             console_message(f"ACEP Grading saved for frame {current_frame_index}: {frame_grading_var.get()}", level="info")
 
         frame_grading_combo.bind("<<ComboboxSelected>>", on_frame_grading_change)
@@ -1784,6 +1948,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             _fg = get_annotation_data(active_file_path)["frame_grading"].get(str(current_frame_index), "")
             frame_grading_var.set(_fg)
             frame_grade_lbl.config(text=f"Frame: {current_frame_index}")
+            update_segmentation_lock_ui()
 
         _frame_grading_refresh_fn = refresh_frame_grading_ui
 
@@ -1791,6 +1956,11 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         seg_frame = tk.LabelFrame(annotations_tab_frame, text="Polygon Segmentation (per frame)", font=("Segoe UI", 9))
         seg_frame.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
         seg_frame.grid_columnconfigure(0, weight=1)
+        segmentation_lock_label = None
+
+        def is_segmentation_locked():
+            grading = get_annotation_data(current_file_path())["frame_grading"].get(str(current_frame_index), "")
+            return grading not in ("Grade 3", "Grade 4", "Grade 5")
 
         def _cancel_draw():
             global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_current_label
@@ -1802,16 +1972,42 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             annotation_canvas_ids = []
             img_label.config(cursor="")
             for btn in _class_buttons.values():
-                btn.state(["!pressed", "!disabled"])
+                btn.state(["!pressed"])
+                if is_segmentation_locked():
+                    btn.state(["disabled"])
+                else:
+                    btn.state(["!disabled"])
 
         def start_draw_for_class(label):
             global annotation_drawing_mode, annotation_current_label, annotation_current_polygon, annotation_canvas_ids
+            if is_segmentation_locked():
+                console_message("Polygon drawing is disabled for frame grades below 3", level="warning")
+                return
             _cancel_draw()
             annotation_drawing_mode = True
             annotation_current_label = label
             img_label.config(cursor="crosshair")
             if label in _class_buttons:
                 _class_buttons[label].state(["pressed"])
+
+        def update_segmentation_lock_ui():
+            locked = is_segmentation_locked()
+            if locked and annotation_drawing_mode:
+                _cancel_draw()
+
+            for btn in _class_buttons.values():
+                btn.state(["!pressed"])
+                if locked:
+                    btn.state(["disabled"])
+                else:
+                    btn.state(["!disabled"])
+
+            if segmentation_lock_label is not None:
+                if locked:
+                    segmentation_lock_label.config(
+                        text="Polygon drawing is disabled until the frame grade is Grade 3 or higher.",
+                        fg="#aa5500",
+                    )
 
         def clear_frame_annotations():
             global current_frame_index
@@ -1836,14 +2032,17 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         vein_labels_frame.grid(row=0, column=0, padx=4, pady=(4, 2), sticky="ew")
         vein_labels_frame.grid_columnconfigure((0, 1), weight=1)
         _vein_classes = [
-            ("CFV Loc 1", "CFV Scanning Location 1"),
-            ("CFV Loc 2", "CFV Scanning Location 2"),
-            ("GSV Loc 2", "GSV Scanning Location 2"),
-            ("FV Loc 3",  "FV Scanning Location 3"),
-            ("PV Loc 4",  "PV Scanning Location 4"),
+            "CFV # 1",
+            "CFV # 2",
+            "GSV # 2",
+            "FV # 3",
+            "PV # 4",
         ]
-        for _vi, (_short, _full) in enumerate(_vein_classes):
-            _btn = ttk.Button(vein_labels_frame, text=_short, style="small.TButton",
+        for _vi, _full in enumerate(_vein_classes):
+            _btn = ttk.Button(
+                vein_labels_frame,
+                text=SEGMENTATION_LABEL_DISPLAY.get(_full, _full),
+                style="small.TButton",
                               command=lambda lbl=_full: start_draw_for_class(lbl))
             _btn.grid(row=_vi // 2, column=_vi % 2, padx=3, pady=2, sticky="ew")
             _class_buttons[_full] = _btn
@@ -1852,15 +2051,18 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         artery_labels_frame.grid(row=1, column=0, padx=4, pady=2, sticky="ew")
         artery_labels_frame.grid_columnconfigure((0, 1), weight=1)
         _artery_classes = [
-            ("CFA Loc 1", "CFA Scanning Location 1"),
-            ("CFA Loc 2", "CFA Scanning Location 2"),
-            ("DFA Loc 2", "DFA Scanning Location 2"),
-            ("FA Loc 2",  "FA Scanning Location 2"),
-            ("FA Loc 3",  "FA Scanning Location 3"),
-            ("PA Loc 4",  "PA Scanning Location 4"),
+            "CFA # 1",
+            "CFA # 2",
+            "DFA # 2",
+            "FA # 2",
+            "FA # 3",
+            "PA # 4",
         ]
-        for _ai, (_short, _full) in enumerate(_artery_classes):
-            _btn = ttk.Button(artery_labels_frame, text=_short, style="small.TButton",
+        for _ai, _full in enumerate(_artery_classes):
+            _btn = ttk.Button(
+                artery_labels_frame,
+                text=SEGMENTATION_LABEL_DISPLAY.get(_full, _full),
+                style="small.TButton",
                               command=lambda lbl=_full: start_draw_for_class(lbl))
             _btn.grid(row=_ai // 2, column=_ai % 2, padx=3, pady=2, sticky="ew")
             _class_buttons[_full] = _btn
@@ -1869,7 +2071,10 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         other_labels_frame.grid(row=2, column=0, padx=4, pady=2, sticky="ew")
         other_labels_frame.grid_columnconfigure((0, 1), weight=1)
         for _oi, _full in enumerate(["Clot", "Other"]):
-            _btn = ttk.Button(other_labels_frame, text=_full, style="small.TButton",
+            _btn = ttk.Button(
+                other_labels_frame,
+                text=SEGMENTATION_LABEL_DISPLAY.get(_full, _full),
+                style="small.TButton",
                               command=lambda lbl=_full: start_draw_for_class(lbl))
             _btn.grid(row=0, column=_oi, padx=3, pady=2, sticky="ew")
             _class_buttons[_full] = _btn
@@ -1882,9 +2087,12 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
         draw_hint = tk.Label(seg_frame, text="Click class to draw | Right-click: close polygon", font=("Segoe UI", 7), fg="gray")
         draw_hint.grid(row=4, column=0, padx=5, pady=(0, 3), sticky="w")
+        segmentation_lock_label = tk.Label(seg_frame, text="", font=("Segoe UI", 7), fg="gray")
+        segmentation_lock_label.grid(row=5, column=0, padx=5, pady=(0, 3), sticky="w")
+        update_segmentation_lock_ui()
 
         ann_list_frame = tk.LabelFrame(annotations_tab_frame, text="Annotations list", font=("Segoe UI", 9))
-        ann_list_frame.grid(row=3, column=0, padx=5, pady=5, sticky="nsew")
+        ann_list_frame.grid(row=4, column=0, padx=5, pady=5, sticky="nsew")
         ann_list_frame.grid_columnconfigure(0, weight=1)
         ann_list_frame.grid_rowconfigure(0, weight=1)
 
@@ -1943,7 +2151,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         ttk.Button(ann_list_frame, text="Delete Selected", command=delete_selected_annotation, style="small.TButton").grid(row=1, column=0, padx=5, pady=3, sticky="w")
 
         io_frame = tk.Frame(annotations_tab_frame)
-        io_frame.grid(row=4, column=0, padx=5, pady=5, sticky="ew")
+        io_frame.grid(row=5, column=0, padx=5, pady=5, sticky="ew")
 
         tk.Label(io_frame, text="Format:").grid(row=0, column=0, padx=(5, 2), pady=3, sticky="w")
         ann_format_var = tk.StringVar(value=config["settings"].get("annotation_format", "Darwin V7"))
@@ -1981,21 +2189,18 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                             active_file_path,
                             {
                                 "tag": get_default_tag_for_file(active_file_path),
-                                "dvt": imported_data["classification"].get("dvt", ""),
+                                "thrombosis": imported_data["classification"].get("thrombosis", ""),
                                 "compressibility": imported_data["classification"].get("compressibility", ""),
-                                "reviewed": bool(imported_data["classification"]["review_status"]["reviewed"]),
+                                "reviewed": bool(imported_data["classification"].get("_reviewed", False)),
                             },
                         )
                         refresh_filepath_display()
+                        overwrite_managed_sidecars(active_file_path)
                     except Exception as exc:
                         console_message(f"Failed to rename after annotation import: {exc}", level="error")
 
                 ann_data_refreshed = get_annotation_data(active_file_path)
-                dvt_var.set(ann_data_refreshed["classification"]["dvt"])
-                compressibility_var.set(
-                    compressibility_value_to_label(ann_data_refreshed["classification"]["compressibility"])
-                )
-                review_var.set(bool(ann_data_refreshed["classification"]["review_status"]["reviewed"]))
+                sync_classification_ui(active_file_path)
                 refresh_frame_grading_ui()
                 update_annotation_list()
                 draw_annotations_on_canvas(img_label, active_file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
@@ -2063,10 +2268,10 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     tags_treeview.column("Group,Element", width=85, anchor='center', stretch=False)
 
     tags_treeview.heading("Name", text="Name")
-    tags_treeview.column("Name", width=180, anchor='w', stretch=False)#Σταθερό πλάτος για το name
+    tags_treeview.column("Name", width=220, anchor='w', stretch=False)#Σταθερό πλάτος για το name
 
     tags_treeview.heading("Value", text="Value", anchor='w')
-    tags_treeview.column("Value", width=350, anchor='w', stretch=False)#Μεγαλύτερο πλάτος για ενεργοποίηση του οριζόντιου scrollbar
+    tags_treeview.column("Value", width=520, anchor='w', stretch=True)#Μεγαλύτερο πλάτος για ενεργοποίηση του οριζόντιου scrollbar
     tags_treeview.bind("<Button-3>", on_right_click)
 
     def load_tags():
@@ -2154,14 +2359,14 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         tag_combobox = None
         try:
             #διαβάζω τις τιμές απο το settings.ini και τις μετατρέπω σε λίστα
-            tag_values = get_runtime_tag_values(include_none=True)
+            tag_display_lookup = get_runtime_tag_display_lookup(include_none=True)
             #print(type(tag_values))
             #print(len(tag_values))
             
-            tag_combobox = ttk.Combobox(sel_tag_frame, width=7, state="readonly") 
-            tag_combobox['values'] = tag_values
+            tag_combobox = ttk.Combobox(sel_tag_frame, width=44, state="readonly")
+            tag_combobox['values'] = list(tag_display_lookup.keys())
             tag_combobox.grid(row=1, column=0, padx=5, pady=0)
-            tag_combobox.set(tag_value)
+            tag_combobox.set(tag_value_to_display_label(tag_value))
         except Exception as e:
             console_message("error while reading tag values from settings.ini", level="error")
             messagebox.showerror("Read tag_values", f"{e}.")
@@ -2702,7 +2907,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         def update_tag(event,  treeview, selected_item):
             if tag_combobox is None:
                 return
-            new_tag = tag_combobox.get()
+            new_tag = get_tag_value_from_display(tag_combobox.get(), include_none=True)
             current_values = treeview.item(selected_item, "values")
             #print(current_values)
             #print(type(current_values))#tuple, δε μπορει να επεξεργαστεί
@@ -2777,7 +2982,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             # --- Polygon drawing event handlers ---
             def on_canvas_left_click(event):
                 global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_scale_x, annotation_scale_y, annotation_current_label
-                if not annotation_drawing_mode:
+                if not annotation_drawing_mode or is_segmentation_locked():
                     return
                 # Determine draw color from current label's category
                 _category = SEG_MASK_TO_CLASS.get(annotation_current_label, "Other")
@@ -2801,7 +3006,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             def on_canvas_right_click(event):
                 """Close the current polygon and save it."""
                 global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_current_label
-                if not annotation_drawing_mode:
+                if not annotation_drawing_mode or is_segmentation_locked():
                     return
                 if len(annotation_current_polygon) < 3:
                     console_message("Need at least 3 points to close polygon", level="warning")
@@ -2907,22 +3112,40 @@ def save_polygon_to_annotations(file_path, frame_index, points, label="polygon")
         "points": points
     })
 
-def save_classification_to_annotations(file_path, dvt="", compressibility="", reviewed=False, reviewed_timestamp=None):
+def save_classification_to_annotations(
+    file_path,
+    thrombosis="",
+    compressibility="",
+    reviewed=False,
+    reviewed_timestamp=None,
+    protocol_deviation=False,
+    protocol_deviation_notes="",
+    dvt=None,
+):
     """Save classification labels for the file."""
     data = get_annotation_data(file_path)
-    previous_reviewed = bool(data["classification"]["review_status"].get("reviewed", False))
+    classification = data["classification"]
+    previous_reviewed = bool(classification.get("_reviewed", False))
 
-    data["classification"]["dvt"] = dvt
-    data["classification"]["compressibility"] = compressibility
-    data["classification"]["review_status"]["reviewed"] = bool(reviewed)
+    if dvt is not None and not thrombosis:
+        thrombosis = dvt
+
+    classification["thrombosis"] = thrombosis
+    classification["compressibility"] = compressibility
+    classification["_reviewed"] = bool(reviewed)
 
     if reviewed:
         if reviewed_timestamp is not None:
-            data["classification"]["review_status"]["timestamp"] = reviewed_timestamp
+            classification["_reviewed_timestamp"] = reviewed_timestamp
         elif not previous_reviewed:
-            data["classification"]["review_status"]["timestamp"] = datetime.now().isoformat()
+            classification["_reviewed_timestamp"] = datetime.now().isoformat()
     else:
-        data["classification"]["review_status"]["timestamp"] = ""
+        classification["_reviewed_timestamp"] = ""
+
+    classification["protocol_deviation"] = bool(protocol_deviation)
+    classification["protocol_deviation_notes"] = (
+        str(protocol_deviation_notes or "").strip() if protocol_deviation else ""
+    )
 
 def save_frame_grading_to_annotations(file_path, frame_index, grading):
     """Save the ACEP Grading score for a specific frame."""
@@ -2936,36 +3159,17 @@ def save_frame_grading_to_annotations(file_path, frame_index, grading):
 def export_annotations_json(file_path, output_json_path, image_width=0, image_height=0):
     """Export annotations for a single DICOM file in LabelMe-inspired JSON format."""
     data = get_annotation_data(file_path)
-    review_status = data["classification"]["review_status"]
     patient_id = get_patient_id_for_metadata(file_path)
-
-    shapes = []
-    for frame_key, polygons in data["frames"].items():
-        for poly in polygons:
-            shapes.append({
-                "label": poly["label"],
-                "points": poly["points"],
-                "group_id": None,
-                "description": "",
-                "shape_type": "polygon",
-                "frame": int(frame_key),
-                "flags": {}
-            })
-    annotation_out = {
-        "version": "1.0",
-        "flags": {
-            "patient_id": patient_id,
-            "dvt": data["classification"].get("dvt", ""),
-            "compressibility": data["classification"].get("compressibility", ""),
-            "reviewed": bool(review_status.get("reviewed", False)),
-            "reviewed_timestamp": review_status.get("timestamp", ""),
-        },
-        "frame_gradings": dict(data.get("frame_grading", {})),
-        "shapes": shapes,
-        "imagePath": os.path.basename(file_path),
-        "imageWidth": image_width,
-        "imageHeight": image_height
-    }
+    clinician_name, clinician_email = get_clinician_identity()
+    annotation_out = export_labelme_annotation(
+        data,
+        os.path.basename(file_path),
+        patient_id=patient_id,
+        image_width=image_width,
+        image_height=image_height,
+        clinician_name=clinician_name,
+        clinician_email=clinician_email,
+    )
     with open(output_json_path, 'w', encoding='utf-8') as f:
         json.dump(annotation_out, f, indent=2, ensure_ascii=False)
 
@@ -2975,26 +3179,8 @@ def import_annotations_json(json_path, file_path):
     try:
         with open(json_path, 'r', encoding='utf-8') as f:
             ann = json.load(f)
-        data = get_annotation_data(file_path)
-        # Classification flags
-        if "flags" in ann and isinstance(ann["flags"], dict):
-            data["classification"]["dvt"] = ann["flags"].get("dvt", "")
-            data["classification"]["compressibility"] = ann["flags"].get("compressibility", "")
-            data["classification"]["review_status"]["reviewed"] = bool(ann["flags"].get("reviewed", False))
-            data["classification"]["review_status"]["timestamp"] = ann["flags"].get("reviewed_timestamp", "")
-        # Per-frame ACEP gradings
-        for fk, fg in ann.get("frame_gradings", {}).items():
-            if fg:
-                data["frame_grading"][str(fk)] = fg
-        # Shapes -> frames
-        for shape in ann.get("shapes", []):
-            frame_key = str(shape.get("frame", 0))
-            if frame_key not in data["frames"]:
-                data["frames"][frame_key] = []
-            data["frames"][frame_key].append({
-                "label": shape.get("label", "polygon"),
-                "points": shape.get("points", [])
-            })
+        imported = import_labelme_annotation(get_annotation_data(file_path), ann)
+        global_annotations[file_path] = imported
     except Exception as e:
         console_message(f"Failed to import annotations from {json_path}: {e}", level="error")
 
@@ -3031,166 +3217,22 @@ def draw_annotations_on_canvas(canvas, file_path, frame_index, scale_x, scale_y)
 
 # ---------- Darwin V7 JSON v2.0 format support ----------
 
-def build_darwin_tag_annotation(name, value, frame_index=0):
-    return {
-        "annotators": [],
-        "frames": {
-            str(frame_index): {
-                "keyframe": True,
-                "tag": {}
-            }
-        },
-        "id": str(uuid.uuid4()),
-        "name": name,
-        "properties": [
-            {
-                "frame_index": frame_index,
-                "name": name,
-                "value": value
-            }
-        ],
-        "ranges": [[frame_index, frame_index + 1]],
-        "reviewers": [],
-        "slot_names": ["0"],
-        "updated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    }
-
 def export_annotations_darwin_json(file_path, output_json_path, image_width=0, image_height=0, frame_count=1):
     """Export annotations in Darwin V7 JSON v2.0 format."""
     data = get_annotation_data(file_path)
     dcm_filename = os.path.basename(file_path)
     patient_id = get_patient_id_for_metadata(file_path)
-    review_status = data["classification"]["review_status"]
-
-    annotations_list = []
-
-    # --- Polygon annotations ---
-    # Group polygons by (frame_key, label) to match Darwin structure
-    for frame_key, polygons in data["frames"].items():
-        for poly in polygons:
-            ann_id = str(uuid.uuid4())
-            frame_idx = int(frame_key)
-            pts = poly["points"]
-            if len(pts) < 3:
-                continue
-
-            # Compute bounding box
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
-            bbox = {
-                "x": min(xs),
-                "y": min(ys),
-                "w": max(xs) - min(xs),
-                "h": max(ys) - min(ys)
-            }
-
-            polygon_entry = {
-                "annotators": [],
-                "frames": {
-                    str(frame_idx): {
-                        "bounding_box": bbox,
-                        "keyframe": True,
-                        "polygon": {
-                            "paths": [
-                                [{"x": p[0], "y": p[1]} for p in pts]
-                            ]
-                        }
-                    }
-                },
-                "global_sub_types": {},
-                "id": ann_id,
-                "interpolate_algorithm": "linear-1.1",
-                "interpolated": True,
-                "name": poly.get("label", "polygon"),
-                "properties": [],
-                "ranges": [[frame_idx, frame_idx + 1]],
-                "reviewers": [],
-                "slot_names": ["0"],
-                "updated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-            }
-            annotations_list.append(polygon_entry)
-
-    # --- Classification / tag annotations ---
-    dvt = data["classification"].get("dvt", "")
-    compressibility = data["classification"].get("compressibility", "")
-    reviewed = bool(review_status.get("reviewed", False))
-    reviewed_timestamp = review_status.get("timestamp", "")
-
-    # Emit one ACEP Grading Score tag annotation per graded frame
-    for grading_frame_key, grading_value in data.get("frame_grading", {}).items():
-        if not grading_value:
-            continue
-        grading_frame_idx = int(grading_frame_key)
-        annotations_list.append(
-            build_darwin_tag_annotation(
-                "ACEP Grading Score",
-                grading_value.replace("Grade ", ""),
-                grading_frame_idx,
-            )
-        )
-
-    # Emit DVT status as a tag annotation
-    if dvt:
-        annotations_list.append(build_darwin_tag_annotation("DVT Status", dvt))
-
-    if compressibility:
-        annotations_list.append(build_darwin_tag_annotation("Compressibility", compressibility))
-
-    annotations_list.append(
-        build_darwin_tag_annotation("Review Status", "Reviewed" if reviewed else "Unreviewed")
+    clinician_name, clinician_email = get_clinician_identity()
+    darwin_out = export_darwin_annotation(
+        data,
+        dcm_filename,
+        patient_id=patient_id,
+        image_width=image_width,
+        image_height=image_height,
+        frame_count=frame_count,
+        clinician_name=clinician_name,
+        clinician_email=clinician_email,
     )
-
-    if reviewed and reviewed_timestamp:
-        annotations_list.append(build_darwin_tag_annotation("Reviewed Timestamp", reviewed_timestamp))
-
-    darwin_out = {
-        "version": "2.0",
-        "schema_ref": "https://darwin-public.s3.eu-west-1.amazonaws.com/darwin_json/2.0/schema.json",
-        "item": {
-            "name": dcm_filename,
-            "path": "/",
-            "source_info": {
-                "item_id": str(uuid.uuid4()),
-                "patient_id": patient_id,
-                "dataset": {
-                    "name": "",
-                    "slug": "",
-                    "dataset_management_url": ""
-                },
-                "team": {
-                    "name": "",
-                    "slug": ""
-                },
-                "workview_url": ""
-            },
-            "slots": [
-                {
-                    "type": "dicom",
-                    "slot_name": "0",
-                    "width": image_width,
-                    "height": image_height,
-                    "fps": None,
-                    "thumbnail_url": "",
-                    "source_files": [
-                        {
-                            "file_name": dcm_filename,
-                            "url": ""
-                        }
-                    ],
-                    "frame_count": frame_count,
-                    "frame_urls": [],
-                    "metadata": {
-                        "handler": None,
-                        "shape": None,
-                        "colorspace": "RGB",
-                        "primary_plane": "AXIAL"
-                    }
-                }
-            ]
-        },
-        "annotations": annotations_list,
-        "properties": []
-    }
 
     with open(output_json_path, 'w', encoding='utf-8') as f:
         json.dump(darwin_out, f, indent=2, ensure_ascii=False)
@@ -3202,50 +3244,8 @@ def import_annotations_darwin_json(json_path, file_path):
     try:
         with open(json_path, 'r', encoding='utf-8') as f:
             darwin = json.load(f)
-
-        data = get_annotation_data(file_path)
-
-        for ann in darwin.get("annotations", []):
-            ann_name = ann.get("name", "")
-
-            # --- Tag / classification annotations ---
-            if ann.get("properties"):
-                for prop in ann["properties"]:
-                    prop_name = prop.get("name", "")
-                    prop_value = prop.get("value", "")
-                    if prop_name == "ACEP Grading Score":
-                        # Map "2" -> "Grade 2", store per-frame
-                        frame_idx = prop.get("frame_index", 0)
-                        grading_str = f"Grade {prop_value}" if prop_value else ""
-                        if grading_str:
-                            data["frame_grading"][str(frame_idx)] = grading_str
-                    elif prop_name == "DVT Status":
-                        data["classification"]["dvt"] = prop_value
-                    elif prop_name == "Compressibility":
-                        data["classification"]["compressibility"] = prop_value
-                    elif prop_name == "Review Status":
-                        data["classification"]["review_status"]["reviewed"] = str(prop_value).strip().lower() in ("reviewed", "true", "1", "yes")
-                        if not data["classification"]["review_status"]["reviewed"]:
-                            data["classification"]["review_status"]["timestamp"] = ""
-                    elif prop_name == "Reviewed Timestamp":
-                        data["classification"]["review_status"]["timestamp"] = prop_value
-                continue  # skip to next annotation (tag has no polygon)
-
-            # --- Polygon annotations ---
-            frames_data = ann.get("frames", {})
-            for frame_key, frame_content in frames_data.items():
-                polygon_data = frame_content.get("polygon", {})
-                paths = polygon_data.get("paths", [])
-                for path in paths:
-                    points = [[pt["x"], pt["y"]] for pt in path]
-                    if len(points) < 3:
-                        continue
-                    if frame_key not in data["frames"]:
-                        data["frames"][frame_key] = []
-                    data["frames"][frame_key].append({
-                        "label": ann_name,
-                        "points": points
-                    })
+        imported = import_darwin_annotation(get_annotation_data(file_path), darwin)
+        global_annotations[file_path] = imported
 
     except Exception as e:
         console_message(f"Failed to import Darwin annotations from {json_path}: {e}", level="error")
@@ -3922,6 +3922,13 @@ def about():
 def open_web_link(web_link_str):
     webbrowser.open_new_tab(web_link_str)
 
+
+def set_preview_frame_title(file_path=""):
+    if file_path:
+        frame_2.configure(text=os.path.basename(file_path))
+    else:
+        frame_2.configure(text="Image preview")
+
 windll.shcore.SetProcessDpiAwareness(0)
 #Δημιουργία του βασικού παραθύρου της εφαρμογής
 root = tk.Tk()
@@ -3968,6 +3975,7 @@ label_head.pack()
 #--- start --- Selected files Πλαίσιο για τη φόρτωση του αρχείου ή του φακέλου ---
 frame_0 = tk.LabelFrame(root, text="Selected files")#, bg="#FEE5EE"
 frame_0.grid(row=1, column=0, padx=0, pady=0, sticky="nsew")
+frame_0.configure(width=300)
 # Ρύθμιση του row και column του frame_1 ώστε να μπορεί να επεκτείνεται δυναμικά
 '''
 frame_0.grid_rowconfigure(0, weight=0)  # Επιτρέπει στον πρώτο row να επεκταθεί
@@ -4106,7 +4114,7 @@ ordered_files_treeview.configure(yscrollcommand=tree2_scrollbar.set)
 
 #--- start --- Πλαίσιο για την προβολή DICOM preview ---
 frame_2 = tk.LabelFrame(root, text="Image preview")#, bg="#FFF5EE"
-frame_2.grid(row=1, column=2, rowspan=3, padx=5, pady=0, sticky="nsew")
+frame_2.grid(row=1, column=2, rowspan=2, padx=5, pady=0, sticky="nsew")
 frame_2.grid_rowconfigure(0, weight=1)  #επεκτίνει το περιεχόμενο του frame_2 προς τα κάτω
 frame_2.grid_columnconfigure(0, weight=1)
 frame_2.grid_propagate(0)
@@ -4114,20 +4122,21 @@ frame_2.grid_propagate(0)
 
 #--- start --- Πλαίσιο για τα attributes του DICOM ---
 frame_3 = tk.LabelFrame(root, text="DICOM Attributes", labelanchor="n")#, bg="#F0F8FF"
-frame_3.grid(row=1, column=3, rowspan=3, padx=5, pady=0, sticky="nsew")
+frame_3.grid(row=1, column=3, rowspan=2, padx=5, pady=0, sticky="nsew")
 frame_3.grid_rowconfigure(0, weight=1)
 frame_3.grid_columnconfigure(0, weight=1)
 frame_3.grid_propagate(0)
+frame_3.configure(width=400)
 #--- end --- Πλαίσιο για τα attributes του DICOM ---
 
 #--- start --- Πλαίσιο πριν την ανωνυμοποιηση ---
 frame_0_1 = tk.LabelFrame(root, text="Actions")#, bg="#F0F8FF"
-frame_0_1.grid(row=3, column=0, padx=5, pady=0, sticky="nsew")
+frame_0_1.grid(row=2, column=0, padx=5, pady=0, sticky="nsew")
+frame_0_1.configure(width=300)
 #frame_0_1.grid_rowconfigure(0, weight=0)  #το πρώτο row δεν επεκτείνεται
 #frame_0_1.grid_rowconfigure(1, weight=0)  #το δευτερο row δεν επεκτείνεται
 #frame_0_1.grid_columnconfigure(0, weight=1)  #επιτρέπει στον πρώτο column να επεκταθεί
 frame_0_1.grid_columnconfigure(1, weight=1)  #επιτρέπει στον δεύτερο column να επεκταθεί
-#frame_0_1.grid_propagate(False)
 
 '''
 frame_0_1.grid_propagate(0 ή 1)
@@ -4159,7 +4168,7 @@ anonymize_button.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="sew
 
 #-----start-------------- frame_1_1 Anonymized Πλαίσιο ---------------------------
 frame_1_1 = tk.LabelFrame(root, text="Anonymized DICOM files")#, bg="#F0F8FF"
-frame_1_1.grid(row=3, column=1, padx=5, pady=0, sticky="nsew")
+frame_1_1.grid(row=2, column=1, padx=5, pady=0, sticky="nsew")
 #frame_1_1.grid_propagate(False)
 #frame_1_1.grid_rowconfigure(0, weight=0)
 #frame_1_1.grid_rowconfigure(1, weight=0)
@@ -4207,8 +4216,9 @@ button_clear2.grid(row=2, column=2, padx=5, pady=5, sticky="sew")
 #-----end-------------- frame_1_1 Anonymized Πλαίσιο ---------------------------
 
 #--- start --- Πλαίσιο για το footer ---
-frame_footer = tk.Frame(root, padx=0, pady=0, bg="#00d0c0")
-frame_footer.grid(row=4, column=0, columnspan=4, sticky="ew")
+frame_footer = tk.Frame(frame_0_1, padx=0, pady=0, bg="#00d0c0")
+frame_footer.grid(row=3, column=0, columnspan=2, padx=0, pady=(4, 0), sticky="ew")
+frame_footer.grid_columnconfigure(1, weight=1)
 
 #διαβάζω το σύνολο των αρχείων dicom που είναι στο output path
 file_count = sum(len(files) for _, _, files in os.walk(output_path))
@@ -4217,16 +4227,13 @@ foot_label1 = tk.Label(frame_footer, text=f"{file_count} files\nat temp folder",
 foot_label1.grid(padx=5, row=0, column=0, sticky="w")
 
 delete_button1 = ttk.Button(frame_footer, text="Delete files", style="small.TButton", command=lambda: del_forlders())
-delete_button1.grid(padx=5, row=0, column=2, sticky="w")
+delete_button1.grid(padx=5, row=0, column=1, sticky="w")
 
 ver_label = tk.Label(frame_footer, text=f"ver: {version}", bg="#00d0c0")
-ver_label.grid(padx=5, row=0, column=3, sticky="w")
+ver_label.grid(padx=5, row=0, column=2, sticky="w")
 
-log_label = tk.Label(frame_footer, text=f"Console\nlog", bg="#00d0c0")
-log_label.grid(padx=5, row=0, column=4, sticky="e")
-
-console = ScrolledText(frame_footer, font=("Segoe UI", 8), wrap="word", height=3)
-console.grid(row=0, column=5, sticky="w")
+console = ScrolledText(frame_footer, font=("Segoe UI", 8), wrap="word", height=3, width=22)
+console.grid(row=1, column=0, columnspan=3, sticky="ew")
 #redirected = Consoleredirect(console)
 #sys.stdout = redirected
 
@@ -4244,13 +4251,12 @@ console.grid(row=0, column=0)#, sticky="w"
 '''
 
 # Ρύθμιση του grid για να προσαρμόζεται δυναμικά το παράθυρο
-root.grid_columnconfigure(0, weight=0)#, minsize=50
+root.grid_columnconfigure(0, weight=0, minsize=300)
 root.grid_columnconfigure(1, weight=0)#, minsize=50
-root.grid_columnconfigure(2, weight=3)   # canvas column — ~75% of remaining space
-root.grid_columnconfigure(3, weight=1)   # attributes/annotations column — ~25%
+root.grid_columnconfigure(2, weight=1)   # canvas column expands
+root.grid_columnconfigure(3, weight=0, minsize=400)   # right attributes/annotations column
 root.grid_rowconfigure(1, weight=1)      # main content row expands vertically
-root.grid_rowconfigure(2, weight=1)
-root.grid_rowconfigure(3, weight=1)
+root.grid_rowconfigure(2, weight=0)
 # Εμφάνιση του παραθύρου
 
 #root.bind("<F12>",quit)

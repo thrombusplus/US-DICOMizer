@@ -2,38 +2,108 @@ import os
 import re
 
 
-DVT_CODE_TO_VALUE = {
-    "D": "DVT",
-    "N": "NO DVT",
+THROMBOSIS_CODE_TO_VALUE = {
+    "DVT1": "DVT1",
+    "DVT0": "DVT0",
+    "X": "",
+}
+
+LEGACY_THROMBOSIS_CODE_TO_VALUE = {
+    "D": "DVT1",
+    "N": "DVT0",
     "X": "",
 }
 
 COMPRESSIBILITY_CODE_TO_VALUE = {
-    "FC": "FC",
-    "PC": "PC",
-    "NC": "NC",
+    "COMP2": "COMP2",
+    "COMP1": "COMP1",
+    "COMP0": "COMP0",
     "X": "",
+}
+
+LEGACY_COMPRESSIBILITY_CODE_TO_VALUE = {
+    "FC": "COMP2",
+    "PC": "COMP1",
+    "NC": "COMP0",
+    "X": "",
+}
+
+THROMBOSIS_LABEL_BY_VALUE = {
+    "": "",
+    "DVT1": "Yes",
+    "DVT0": "No",
 }
 
 COMPRESSIBILITY_LABEL_BY_VALUE = {
     "": "",
-    "FC": "Full",
-    "PC": "Partial",
-    "NC": "None",
+    "COMP2": "Yes",
+    "COMP1": "Partial",
+    "COMP0": "No",
+}
+
+DEFAULT_TAG_LABEL_BY_VALUE = {
+    "none": "None",
+    "CFVr-L": "Common Femoral Vein R-shot (Left)",
+    "CFV-L": "Common Femoral Vein (Left)",
+    "CFVr-R": "Common Femoral Vein R-shot (Right)",
+    "CFV-R": "Common Femoral Vein (Right)",
+    "GSVr-L": "Great Saphenous Vein R-shot (Left)",
+    "GSV-L": "Great Saphenous Vein (Left)",
+    "GSVr-R": "Great Saphenous Vein R-shot (Right)",
+    "GSV-R": "Great Saphenous Vein (Right)",
+    "FVr-L": "Femoral Vein R-shot (Left)",
+    "FV-L": "Femoral Vein (Left)",
+    "FVr-R": "Femoral Vein R-shot (Right)",
+    "FV-R": "Femoral Vein (Right)",
+    "FV-Dr-L": "Distal Femoral Vein R-shot (Left)",
+    "FV-D-L": "Distal Femoral Vein (Left)",
+    "FV-Dr-R": "Distal Femoral Vein R-shot (Right)",
+    "FV-D-R": "Distal Femoral Vein (Right)",
+    "PVr-L": "Popliteal Vein R-shot (Left)",
+    "PV-L": "Popliteal Vein (Left)",
+    "PVr-R": "Popliteal Vein R-shot (Right)",
+    "PV-R": "Popliteal Vein (Right)",
+    "OPT-L": "Optional View (Left)",
+    "OPT-R": "Optional View (Right)",
+}
+
+DVT_CODE_TO_VALUE = dict(THROMBOSIS_CODE_TO_VALUE)
+DVT_CODE_TO_VALUE.update(LEGACY_THROMBOSIS_CODE_TO_VALUE)
+
+VALUE_TO_THROMBOSIS_CODE = {
+    "": "X",
+    "DVT1": "DVT1",
+    "DVT0": "DVT0",
+}
+
+VALUE_TO_COMPRESSIBILITY_CODE = {
+    "": "X",
+    "COMP2": "COMP2",
+    "COMP1": "COMP1",
+    "COMP0": "COMP0",
+}
+
+THROMBOSIS_VALUE_BY_LABEL = {
+    "YES": "DVT1",
+    "NO": "DVT0",
+    "DVT1": "DVT1",
+    "DVT0": "DVT0",
+    "DVT": "DVT1",
+    "NO DVT": "DVT0",
 }
 
 COMPRESSIBILITY_VALUE_BY_LABEL = {
-    label: value for value, label in COMPRESSIBILITY_LABEL_BY_VALUE.items()
-}
-
-REVIEW_CODE_TO_VALUE = {
-    "R": True,
-    "U": False,
-}
-
-VALUE_TO_DVT_CODE = {value: code for code, value in DVT_CODE_TO_VALUE.items()}
-VALUE_TO_COMPRESSIBILITY_CODE = {
-    value: code for code, value in COMPRESSIBILITY_CODE_TO_VALUE.items()
+    "YES": "COMP2",
+    "PARTIAL": "COMP1",
+    "NO": "COMP0",
+    "COMP2": "COMP2",
+    "COMP1": "COMP1",
+    "COMP0": "COMP0",
+    "FC": "COMP2",
+    "PC": "COMP1",
+    "NC": "COMP0",
+    "FULL": "COMP2",
+    "NONE": "COMP0",
 }
 
 GROUPED_FILE_NO_PATTERN = re.compile(r"^\d(?:_\d{3})+$")
@@ -54,34 +124,88 @@ def normalize_tag_values(tag_values):
     return sorted(set(normalized), key=len, reverse=True)
 
 
-def encode_dvt_code(value):
-    return VALUE_TO_DVT_CODE.get(value or "", "X")
+def normalize_thrombosis_value(value):
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+
+    upper_value = normalized.upper()
+    if normalized in THROMBOSIS_LABEL_BY_VALUE:
+        return normalized
+    if upper_value in THROMBOSIS_VALUE_BY_LABEL:
+        return THROMBOSIS_VALUE_BY_LABEL[upper_value]
+    return normalized
 
 
-def decode_dvt_code(code):
-    return DVT_CODE_TO_VALUE.get((code or "").upper(), "")
+def thrombosis_value_to_label(value):
+    normalized = normalize_thrombosis_value(value)
+    return THROMBOSIS_LABEL_BY_VALUE.get(normalized, normalized)
 
 
-def encode_compressibility_code(value):
-    return VALUE_TO_COMPRESSIBILITY_CODE.get(value or "", "X")
+def thrombosis_label_to_value(label):
+    normalized = str(label or "").strip()
+    if not normalized:
+        return ""
+    if normalized in THROMBOSIS_LABEL_BY_VALUE:
+        return normalized
+    return THROMBOSIS_VALUE_BY_LABEL.get(normalized.upper(), normalized)
 
 
-def decode_compressibility_code(code):
-    return COMPRESSIBILITY_CODE_TO_VALUE.get((code or "").upper(), "")
+def normalize_compressibility_value(value):
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+
+    upper_value = normalized.upper()
+    if normalized in COMPRESSIBILITY_LABEL_BY_VALUE:
+        return normalized
+    if upper_value in COMPRESSIBILITY_VALUE_BY_LABEL:
+        return COMPRESSIBILITY_VALUE_BY_LABEL[upper_value]
+    return normalized
 
 
 def compressibility_value_to_label(value):
-    normalized = str(value or "").strip()
+    normalized = normalize_compressibility_value(value)
     return COMPRESSIBILITY_LABEL_BY_VALUE.get(normalized, normalized)
 
 
 def compressibility_label_to_value(label):
     normalized = str(label or "").strip()
-    if normalized in COMPRESSIBILITY_VALUE_BY_LABEL:
-        return COMPRESSIBILITY_VALUE_BY_LABEL[normalized]
+    if not normalized:
+        return ""
     if normalized in COMPRESSIBILITY_LABEL_BY_VALUE:
         return normalized
-    return normalized
+    return COMPRESSIBILITY_VALUE_BY_LABEL.get(normalized.upper(), normalized)
+
+
+def encode_thrombosis_code(value):
+    return VALUE_TO_THROMBOSIS_CODE.get(normalize_thrombosis_value(value), "X")
+
+
+def decode_thrombosis_code(code):
+    normalized = str(code or "").strip().upper()
+    if normalized in THROMBOSIS_CODE_TO_VALUE:
+        return THROMBOSIS_CODE_TO_VALUE[normalized]
+    return LEGACY_THROMBOSIS_CODE_TO_VALUE.get(normalized, "")
+
+
+def encode_dvt_code(value):
+    return encode_thrombosis_code(value)
+
+
+def decode_dvt_code(code):
+    return decode_thrombosis_code(code)
+
+
+def encode_compressibility_code(value):
+    return VALUE_TO_COMPRESSIBILITY_CODE.get(normalize_compressibility_value(value), "X")
+
+
+def decode_compressibility_code(code):
+    normalized = str(code or "").strip().upper()
+    if normalized in COMPRESSIBILITY_CODE_TO_VALUE:
+        return COMPRESSIBILITY_CODE_TO_VALUE[normalized]
+    return LEGACY_COMPRESSIBILITY_CODE_TO_VALUE.get(normalized, "")
 
 
 def encode_review_code(reviewed):
@@ -89,7 +213,27 @@ def encode_review_code(reviewed):
 
 
 def decode_review_code(code):
-    return REVIEW_CODE_TO_VALUE.get((code or "").upper(), False)
+    return str(code or "").strip().upper() == "R"
+
+
+def tag_value_to_display_label(tag_value):
+    normalized = str(tag_value or "").strip()
+    if not normalized:
+        return ""
+    return DEFAULT_TAG_LABEL_BY_VALUE.get(normalized, normalized)
+
+
+def build_tag_display_lookup(tag_values):
+    lookup = {}
+    for raw_value in tag_values or ():
+        if not raw_value:
+            continue
+        raw_value = str(raw_value)
+        label = tag_value_to_display_label(raw_value)
+        if label in lookup and lookup[label] != raw_value:
+            label = f"{label} [{raw_value}]"
+        lookup[label] = raw_value
+    return lookup
 
 
 def format_file_no(file_no):
@@ -102,18 +246,22 @@ def build_anonymized_filename(
     patient_id,
     file_no,
     tag,
-    dvt="",
+    thrombosis="",
     compressibility="",
     reviewed=False,
     include_classification=False,
     extension=".dcm",
+    dvt=None,
 ):
+    if dvt is not None and not thrombosis:
+        thrombosis = dvt
+
     file_no_str = format_file_no(file_no)
     stem = f"anonymized_{patient_id}_{file_no_str}_{tag}"
     if include_classification:
         stem = (
             f"{stem}-"
-            f"{encode_dvt_code(dvt)}-"
+            f"{encode_thrombosis_code(thrombosis)}-"
             f"{encode_compressibility_code(compressibility)}-"
             f"{encode_review_code(reviewed)}"
         )
@@ -123,6 +271,7 @@ def build_anonymized_filename(
 def _parse_compact_suffix(suffix):
     if not suffix:
         return {
+            "thrombosis": "",
             "dvt": "",
             "compressibility": "",
             "reviewed": False,
@@ -135,9 +284,11 @@ def _parse_compact_suffix(suffix):
     if len(parts) != 3:
         return None
 
-    dvt_code, compressibility_code, review_code = parts
+    thrombosis_code, compressibility_code, review_code = parts
+    thrombosis = decode_thrombosis_code(thrombosis_code)
     return {
-        "dvt": decode_dvt_code(dvt_code),
+        "thrombosis": thrombosis,
+        "dvt": thrombosis,
         "compressibility": decode_compressibility_code(compressibility_code),
         "reviewed": decode_review_code(review_code),
     }
@@ -193,6 +344,7 @@ def parse_anonymized_filename(filename, tag_values):
             "patient_id": patient_id,
             "file_no": file_no,
             "tag": tag,
+            "thrombosis": compact["thrombosis"],
             "dvt": compact["dvt"],
             "compressibility": compact["compressibility"],
             "reviewed": compact["reviewed"],
