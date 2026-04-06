@@ -2154,62 +2154,62 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         io_frame = tk.Frame(annotations_tab_frame)
         io_frame.grid(row=5, column=0, padx=5, pady=5, sticky="ew")
 
-        tk.Label(io_frame, text="Format:").grid(row=0, column=0, padx=(5, 2), pady=3, sticky="w")
-        ann_format_var = tk.StringVar(value=config["settings"].get("annotation_format", "Darwin V7"))
-        ttk.Combobox(io_frame, textvariable=ann_format_var, values=["LabelMe", "Darwin V7"], state="readonly", width=10).grid(row=0, column=1, padx=2, pady=3, sticky="w")
+        # tk.Label(io_frame, text="Format:").grid(row=0, column=0, padx=(5, 2), pady=3, sticky="w")
+        # ann_format_var = tk.StringVar(value=config["settings"].get("annotation_format", "Darwin V7"))
+        # ttk.Combobox(io_frame, textvariable=ann_format_var, values=["LabelMe", "Darwin V7"], state="readonly", width=10).grid(row=0, column=1, padx=2, pady=3, sticky="w")
 
-        def export_ann_file():
-            active_file_path = current_file_path()
-            fmt = ann_format_var.get()
-            suffix = ".json" if fmt == "LabelMe" else "_darwin.json"
-            out_path = filedialog.asksaveasfilename(
-                title=f"Export annotations ({fmt})",
-                defaultextension=".json",
-                filetypes=[("JSON files", "*.json")],
-                initialfile=os.path.basename(active_file_path).replace(".dcm", suffix)
-            )
-            if out_path:
-                if fmt == "Darwin V7":
-                    export_annotations_darwin_json(active_file_path, out_path, columnsNo, rowsNo, num_frames)
-                else:
-                    export_annotations_json(active_file_path, out_path, columnsNo, rowsNo)
-                messagebox.showinfo("Export", f"Annotations exported ({fmt}) to:\n{out_path}")
+        # def export_ann_file():
+        #     active_file_path = current_file_path()
+        #     fmt = ann_format_var.get()
+        #     suffix = ".json" if fmt == "LabelMe" else "_darwin.json"
+        #     out_path = filedialog.asksaveasfilename(
+        #         title=f"Export annotations ({fmt})",
+        #         defaultextension=".json",
+        #         filetypes=[("JSON files", "*.json")],
+        #         initialfile=os.path.basename(active_file_path).replace(".dcm", suffix)
+        #     )
+        #     if out_path:
+        #         if fmt == "Darwin V7":
+        #             export_annotations_darwin_json(active_file_path, out_path, columnsNo, rowsNo, num_frames)
+        #         else:
+        #             export_annotations_json(active_file_path, out_path, columnsNo, rowsNo)
+        #         messagebox.showinfo("Export", f"Annotations exported ({fmt}) to:\n{out_path}")
 
-        def import_ann_file():
-            active_file_path = current_file_path()
-            in_path = filedialog.askopenfilename(
-                title="Import annotations JSON",
-                filetypes=[("JSON files", "*.json")]
-            )
-            if in_path:
-                detected = detect_and_import_annotations(in_path, active_file_path)
-                if detected:
-                    try:
-                        imported_data = get_annotation_data(active_file_path)
-                        active_file_path = rename_anonymized_file(
-                            active_file_path,
-                            {
-                                "tag": get_default_tag_for_file(active_file_path),
-                                "thrombosis": imported_data["classification"].get("thrombosis", ""),
-                                "compressibility": imported_data["classification"].get("compressibility", ""),
-                                "reviewed": bool(imported_data["classification"].get("_reviewed", False)),
-                            },
-                        )
-                        refresh_filepath_display()
-                        overwrite_managed_sidecars(active_file_path)
-                    except Exception as exc:
-                        console_message(f"Failed to rename after annotation import: {exc}", level="error")
+        # def import_ann_file():
+        #     active_file_path = current_file_path()
+        #     in_path = filedialog.askopenfilename(
+        #         title="Import annotations JSON",
+        #         filetypes=[("JSON files", "*.json")]
+        #     )
+        #     if in_path:
+        #         detected = detect_and_import_annotations(in_path, active_file_path)
+        #         if detected:
+        #             try:
+        #                 imported_data = get_annotation_data(active_file_path)
+        #                 active_file_path = rename_anonymized_file(
+        #                     active_file_path,
+        #                     {
+        #                         "tag": get_default_tag_for_file(active_file_path),
+        #                         "thrombosis": imported_data["classification"].get("thrombosis", ""),
+        #                         "compressibility": imported_data["classification"].get("compressibility", ""),
+        #                         "reviewed": bool(imported_data["classification"].get("_reviewed", False)),
+        #                     },
+        #                 )
+        #                 refresh_filepath_display()
+        #                 overwrite_managed_sidecars(active_file_path)
+        #             except Exception as exc:
+        #                 console_message(f"Failed to rename after annotation import: {exc}", level="error")
 
-                ann_data_refreshed = get_annotation_data(active_file_path)
-                sync_classification_ui(active_file_path)
-                refresh_frame_grading_ui()
-                update_annotation_list()
-                draw_annotations_on_canvas(img_label, active_file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
-                fmt_name = "Darwin V7" if detected == "darwin" else "LabelMe"
-                messagebox.showinfo("Import", f"Annotations imported ({fmt_name}).")
+        #         ann_data_refreshed = get_annotation_data(active_file_path)
+        #         sync_classification_ui(active_file_path)
+        #         refresh_frame_grading_ui()
+        #         update_annotation_list()
+        #         draw_annotations_on_canvas(img_label, active_file_path, current_frame_index, annotation_scale_x, annotation_scale_y)
+        #         fmt_name = "Darwin V7" if detected == "darwin" else "LabelMe"
+        #         messagebox.showinfo("Import", f"Annotations imported ({fmt_name}).")
 
-        ttk.Button(io_frame, text="Export", command=export_ann_file, style="small.TButton").grid(row=0, column=2, padx=5, pady=3, sticky="w")
-        ttk.Button(io_frame, text="Import", command=import_ann_file, style="small.TButton").grid(row=0, column=3, padx=5, pady=3, sticky="w")
+        # ttk.Button(io_frame, text="Export", command=export_ann_file, style="small.TButton").grid(row=0, column=2, padx=5, pady=3, sticky="w")
+        # ttk.Button(io_frame, text="Import", command=import_ann_file, style="small.TButton").grid(row=0, column=3, padx=5, pady=3, sticky="w")
 
         update_annotation_list()
         annotation_notebook.select(annotations_tab_frame)
