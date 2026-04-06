@@ -751,10 +751,6 @@ def rename_anonymized_file(old_path, file_state):
         patient_id=parsed["patient_id"],
         file_no=parsed["file_no"],
         tag=target_tag,
-        thrombosis=file_state.get("thrombosis", file_state.get("dvt", "")),
-        compressibility=file_state.get("compressibility", ""),
-        reviewed=file_state.get("reviewed", False),
-        include_classification=True,
     )
     new_path = os.path.join(os.path.dirname(old_path), new_filename)
 
@@ -1890,7 +1886,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 tag_editor_var.set(tag_value_to_display_label(previous["tag"]))
                 sync_classification_ui(active_file_path)
                 messagebox.showerror("Rename failed", str(exc))
-                console_message(f"Failed to sync anonymized filename with classification: {exc}", level="error")
+                console_message(f"Failed to sync anonymized filename tag: {exc}", level="error")
 
         def on_classification_change(event=None):
             toggle_protocol_deviation_notes(clear_if_disabled=not bool(protocol_deviation_var.get()))

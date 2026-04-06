@@ -258,13 +258,6 @@ def build_anonymized_filename(
 
     file_no_str = format_file_no(file_no)
     stem = f"anonymized_{patient_id}_{file_no_str}_{tag}"
-    if include_classification:
-        stem = (
-            f"{stem}-"
-            f"{encode_thrombosis_code(thrombosis)}-"
-            f"{encode_compressibility_code(compressibility)}-"
-            f"{encode_review_code(reviewed)}"
-        )
     return f"{stem}{extension}"
 
 

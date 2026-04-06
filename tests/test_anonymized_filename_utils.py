@@ -104,7 +104,7 @@ class AnonymizedFilenameUtilsTests(unittest.TestCase):
 
         self.assertEqual(filename, "anonymized_P_01_0_001_CFV-R.dcm")
 
-    def test_build_compact_filename_from_classification_state(self):
+    def test_build_ignores_annotation_classification_suffixes(self):
         filename = build_anonymized_filename(
             patient_id="P-01",
             file_no=1,
@@ -115,7 +115,7 @@ class AnonymizedFilenameUtilsTests(unittest.TestCase):
             include_classification=True,
         )
 
-        self.assertEqual(filename, "anonymized_P-01_0_001_FV-D-R-DVT1-COMP2-R.dcm")
+        self.assertEqual(filename, "anonymized_P-01_0_001_FV-D-R.dcm")
 
     def test_thrombosis_value_to_pretty_label(self):
         self.assertEqual(thrombosis_value_to_label("DVT1"), "Yes")
