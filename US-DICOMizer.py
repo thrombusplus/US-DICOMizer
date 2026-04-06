@@ -17,8 +17,11 @@ import sys
 import ast
 from ctypes import windll
 import configparser
-import random
 
+from autocrop_utils import (
+    clamp_crop_box,
+    detect_dicom_autocrop_box,
+)
 from anonymized_filename_utils import (
     build_anonymized_filename as build_anonymized_filename_impl,
     COMPRESSIBILITY_LABEL_BY_VALUE,
@@ -38,6 +41,26 @@ from annotation_metadata_utils import (
     export_labelme_annotation,
     import_darwin_annotation,
     import_labelme_annotation,
+)
+from package_io_utils import (
+    find_existing_sidecar_paths,
+    get_preferred_sidecar_paths,
+    path_is_within,
+)
+from package_roundtrip_utils import (
+    export_package_to_zip,
+    extract_zip_package,
+    iter_dicom_files_in_directory as iter_package_dicom_files,
+    load_annotation_sidecar_data,
+    write_annotation_sidecars,
+)
+from workflow_debug_utils import (
+    parse_debug_allow_all_steps,
+    should_force_annotation_stage,
+)
+from settings_io_utils import (
+    write_config_atomic,
+    write_text_atomic,
 )
 
 
@@ -133,6 +156,11 @@ version = _read_version()
 release_date = _read_release_date()
 temp_output_dir = None
 zcount = 0
+files_folder = None
+output_directory2 = None
+active_package_root = None
+active_package_name = None
+active_package_cleanup_on_export = False
 
 # ---------- Annotation state ----------
 # global_annotations[file_path] = {
@@ -229,8 +257,9 @@ def create_settings_file(settings_file_path):
     if not os.path.exists(settings_file_path):
         #για να παίρνει τον σωστό φάκελο του κάθε χρήστη
         files_output_path = os.path.join(app_directory, "output")
-        with open(settings_file_path, 'w') as file:
-            file.write(f"""
+        write_text_atomic(
+            settings_file_path,
+            f"""
 [settings]
 user_can_change_compression_level = yes
 compression_level = 85
@@ -241,6 +270,7 @@ patient_s_ID = keep
 annotation_format = Darwin V7
 clinician_name =
 clinician_email =
+debug_allow_all_steps = no
 
 [crop_area]
 x0_value = 10
@@ -339,8 +369,9 @@ tags_link = https://app.thrombus.eu/studies/a
 device0 = [379046942],[337,69,686,727],[263,53,536,569]
 device1 = [323075254],[260,130,835,735],[200,100,650,575]
 
-""")
-        
+""",
+        )
+
         messagebox.showinfo("Settings file", "File settings.ini created with default values.")
 
 #την καλώ για αρχικοποίηση του settings.ini
@@ -397,6 +428,7 @@ if not config.has_section("settings"):
     config["settings"] = {}
 config["settings"].setdefault("clinician_name", "")
 config["settings"].setdefault("clinician_email", "")
+config["settings"].setdefault("debug_allow_all_steps", "no")
 
 
 #------------- INITIALIZE -------------
@@ -446,7 +478,7 @@ try:
     from pydicom.uid import UID
     from pydicom.dataelem import DataElement
     import uuid
-    from PIL import Image, ImageTk, ImageDraw
+    from PIL import Image, ImageTk
     import cv2 as cv
     import numpy as np
     import matplotlib.pyplot as plt
@@ -499,6 +531,11 @@ def get_clinician_identity():
         str(settings_section.get("clinician_name", "")).strip(),
         str(settings_section.get("clinician_email", "")).strip(),
     )
+
+
+def debug_allow_all_steps():
+    settings_section = config["settings"] if config.has_section("settings") else {}
+    return parse_debug_allow_all_steps(settings_section.get("debug_allow_all_steps", "no"))
 
 
 def parse_anonymized_filename(filename):
@@ -582,19 +619,15 @@ def detect_annotation_format_file(json_path):
 
 
 def load_annotation_sidecar_if_present(file_path):
-    json_path = os.path.splitext(file_path)[0] + ".json"
-    darwin_path = os.path.splitext(file_path)[0] + "_darwin.json"
-
-    if os.path.isfile(darwin_path):
-        detect_and_import_annotations(darwin_path, file_path)
-        console_message(f"Loaded Darwin annotations from {darwin_path}", level="info")
-        return "darwin"
-
-    if os.path.isfile(json_path):
-        detected = detect_and_import_annotations(json_path, file_path)
-        console_message(f"Loaded annotations from {json_path}", level="info")
+    detected, annotation_data, source_path = load_annotation_sidecar_data(
+        file_path,
+        package_root=active_package_root,
+    )
+    if annotation_data is not None:
+        global_annotations[file_path] = annotation_data
+    if source_path:
+        console_message(f"Loaded annotations from {source_path}", level="info")
         return detected
-
     return None
 
 
@@ -710,35 +743,51 @@ def refresh_treeview_path_references(old_path, new_path):
                 update_treeview_file_reference(treeview, item_id, file_name, new_path)
 
 
-def get_sidecar_dimensions(file_path):
-    try:
-        ds = pydicom.dcmread(file_path, stop_before_pixels=True)
-        columns = int(getattr(ds, "Columns", 0) or 0)
-        rows = int(getattr(ds, "Rows", 0) or 0)
-        frame_count = int(getattr(ds, "NumberOfFrames", 1) or 1)
-        return columns, rows, frame_count
-    except Exception:
-        return 0, 0, 1
+def set_active_package_context(package_root, package_name=None, cleanup_on_export=False):
+    global active_package_root, active_package_name, active_package_cleanup_on_export
+    global output_directory2, files_folder
+
+    if not package_root:
+        return
+
+    package_root = os.path.normpath(package_root)
+    package_name = package_name or os.path.basename(package_root.rstrip("\\/")) or "anonymized_export"
+
+    active_package_root = package_root
+    active_package_name = package_name
+    active_package_cleanup_on_export = bool(cleanup_on_export)
+
+    # Keep legacy globals in sync while the zip/export flow is migrated.
+    output_directory2 = package_root
+    files_folder = package_name
+
+
+def clear_active_package_context():
+    global active_package_root, active_package_name, active_package_cleanup_on_export
+    global output_directory2, files_folder
+
+    active_package_root = None
+    active_package_name = None
+    active_package_cleanup_on_export = False
+    output_directory2 = None
+    files_folder = None
+
+
+def iter_dicom_files_in_directory(folder_path):
+    yield from iter_package_dicom_files(folder_path)
 
 
 def overwrite_managed_sidecars(file_path, create_missing_format=None):
-    columns, rows, frame_count = get_sidecar_dimensions(file_path)
-    json_path = os.path.splitext(file_path)[0] + ".json"
-    darwin_path = os.path.splitext(file_path)[0] + "_darwin.json"
-
-    json_format = detect_annotation_format_file(json_path) if os.path.isfile(json_path) else None
-    if json_format == "darwin":
-        export_annotations_darwin_json(file_path, json_path, columns, rows, frame_count)
-    elif json_format == "labelme":
-        export_annotations_json(file_path, json_path, columns, rows)
-
-    if os.path.isfile(darwin_path):
-        export_annotations_darwin_json(file_path, darwin_path, columns, rows, frame_count)
-
-    if create_missing_format == "Darwin V7" and not os.path.isfile(darwin_path):
-        export_annotations_darwin_json(file_path, darwin_path, columns, rows, frame_count)
-    elif create_missing_format == "LabelMe" and not os.path.isfile(json_path):
-        export_annotations_json(file_path, json_path, columns, rows)
+    clinician_name, clinician_email = get_clinician_identity()
+    write_annotation_sidecars(
+        file_path,
+        get_annotation_data(file_path),
+        package_root=active_package_root,
+        create_missing_format=create_missing_format,
+        patient_id=get_patient_id_for_metadata(file_path),
+        clinician_name=clinician_name,
+        clinician_email=clinician_email,
+    )
 
 
 def rename_anonymized_file(old_path, file_state):
@@ -758,13 +807,16 @@ def rename_anonymized_file(old_path, file_state):
         return old_path
 
     managed_paths = []
-    labelme_path = os.path.splitext(old_path)[0] + ".json"
-    darwin_path = os.path.splitext(old_path)[0] + "_darwin.json"
+    old_sidecars = find_existing_sidecar_paths(old_path, package_root=active_package_root)
+    preferred_new_sidecars = get_preferred_sidecar_paths(new_path, package_root=active_package_root)
+    stale_sidecars = []
 
-    if os.path.isfile(labelme_path):
-        managed_paths.append((labelme_path, os.path.splitext(new_path)[0] + ".json"))
-    if os.path.isfile(darwin_path):
-        managed_paths.append((darwin_path, os.path.splitext(new_path)[0] + "_darwin.json"))
+    if old_sidecars["generic"]:
+        managed_paths.append((old_sidecars["generic"][0], preferred_new_sidecars["generic"]))
+        stale_sidecars.extend(old_sidecars["generic"][1:])
+    if old_sidecars["darwin"]:
+        managed_paths.append((old_sidecars["darwin"][0], preferred_new_sidecars["darwin"]))
+        stale_sidecars.extend(old_sidecars["darwin"][1:])
 
     all_targets = [new_path] + [target for _, target in managed_paths]
     for target in all_targets:
@@ -797,12 +849,16 @@ def rename_anonymized_file(old_path, file_state):
     if annotation_current_file == old_path:
         annotation_current_file = new_path
 
+    for stale_sidecar in stale_sidecars:
+        if os.path.isfile(stale_sidecar):
+            os.remove(stale_sidecar)
+
     overwrite_managed_sidecars(new_path)
     return new_path
 
 
 def settings():
-    global output_path, output_path_text, compression_entry, ann_fmt_settings_var, clinician_name_entry, clinician_email_entry, x0_entry, y0_entry, x1_entry, y1_entry
+    global output_path, output_path_text, compression_entry, ann_fmt_settings_var, clinician_name_entry, clinician_email_entry, debug_all_steps_var, x0_entry, y0_entry, x1_entry, y1_entry
     #logger = logging.getLogger('dicom_app')  # Ανάκτηση του ίδιου logger
     
     settings_window = tk.Toplevel(root)
@@ -861,6 +917,14 @@ def settings():
         clinician_email_entry = ttk.Entry(settings_01, width=40)
         clinician_email_entry.grid(column=1, row=5, sticky="ew", pady=(6, 0))
         clinician_email_entry.insert(0, config['settings'].get('clinician_email', ''))
+
+        debug_all_steps_var = tk.BooleanVar(value=debug_allow_all_steps())
+        debug_all_steps_cb = ttk.Checkbutton(
+            settings_01,
+            text="Debug: allow all workflow steps for anonymized files",
+            variable=debug_all_steps_var,
+        )
+        debug_all_steps_cb.grid(column=0, row=6, columnspan=2, sticky="w", pady=(8, 0))
 
         '''
         settings_02 = ttk.LabelFrame(settings_window, text="Custom crop area")
@@ -985,7 +1049,7 @@ def select_output_folder():
 
        
 def save_settings(settings_window):
-    global config, compression_entry, ann_fmt_settings_var, clinician_name_entry, clinician_email_entry, output_path #,x0_entry, y0_entry, x1_entry, y1_entry
+    global config, compression_entry, ann_fmt_settings_var, clinician_name_entry, clinician_email_entry, debug_all_steps_var, output_path #,x0_entry, y0_entry, x1_entry, y1_entry
     
     compression_level = compression_entry.get()
     clinician_name = clinician_name_entry.get().strip()
@@ -1008,6 +1072,7 @@ def save_settings(settings_window):
     config['settings']['annotation_format'] = ann_fmt_settings_var.get()
     config['settings']['clinician_name'] = clinician_name
     config['settings']['clinician_email'] = clinician_email
+    config['settings']['debug_allow_all_steps'] = "yes" if bool(debug_all_steps_var.get()) else "no"
 
     '''
     config['crop_area']['x0_value'] = x0_value
@@ -1016,9 +1081,12 @@ def save_settings(settings_window):
     config['crop_area']['y1_value'] = y1_value 
     '''
     
-    #αποθήκευση των τιμών στο αρχείο settings.ini
-    with open(settings_file_path, 'w') as configfile:
-        config.write(configfile)
+    try:
+        write_config_atomic(settings_file_path, config)
+    except Exception as e:
+        messagebox.showerror("Save settings", f"Failed to save settings:\n{e}")
+        console_message(f"Failed to save settings: {e}", level="error")
+        return
 
     settings_window.destroy()
 
@@ -1138,36 +1206,31 @@ def load_file():
         console_message(f"An error occurred: {str(e)}",level="error")
         return
 
-def load_folder():
+def load_folder(folder_path=None):
     global temp_output_dir
     # Παράθυρο επιλογής φακέλου
-    if temp_output_dir is None:
+    if folder_path is None and temp_output_dir is None:
         folder_path = filedialog.askdirectory()
-    else:
+    elif folder_path is None:
         folder_path = temp_output_dir
     
     try:
         print(folder_path)  # for debug
         if not folder_path:
             return  # Αν δεν επιλεχθεί φάκελος, επιστρέφει
+        folder_path = os.path.normpath(folder_path)
         
         dicom_files = []
         
-        #αναζήτηση όλων των αρχείων στον φάκελο
-        for f in os.listdir(folder_path):
-            file_path = os.path.join(folder_path, f)
-            
-            #έλεγχος αν είναι αρχείο
-            if os.path.isfile(file_path):
-                try:
-                    #προσπάθεια ανάγνωσης του αρχείου ως DICOM
-                    ds = pydicom.dcmread(file_path, stop_before_pixels=True)
-                    dicom_files.append(os.path.normpath(file_path))  # Κανονικοποίηση του μονοπατιού
-                    
-                except pydicom.errors.InvalidDicomError:
-                    #print(f"{f} is not DICOM, skipped")  #το αρχείο δεν είναι DICOM
-                    console_message(f"{f} is not DICOM, skipped",level="debug")
-                    continue
+        #αναζήτηση όλων των αρχείων στον φάκελο και στους υποφακέλους
+        for file_path in iter_dicom_files_in_directory(folder_path):
+            try:
+                #προσπάθεια ανάγνωσης του αρχείου ως DICOM
+                ds = pydicom.dcmread(file_path, stop_before_pixels=True)
+                dicom_files.append(os.path.normpath(file_path))  # Κανονικοποίηση του μονοπατιού
+            except pydicom.errors.InvalidDicomError:
+                console_message(f"{os.path.basename(file_path)} is not DICOM, skipped",level="debug")
+                continue
 
         total_files = len(dicom_files)
         #print(f"Total DICOM files found: {total_files}")
@@ -1179,6 +1242,7 @@ def load_folder():
             return
         
         loaded_patient_ids = set()
+        loaded_annotation_ready = False
 
         #προσθήκη των DICOM αρχείων στο treeview
         for file_path in dicom_files:
@@ -1189,9 +1253,23 @@ def load_folder():
             if parsed and parsed.get("patient_id"):
                 loaded_patient_ids.add(parsed["patient_id"])
             if is_annotation_ready:
+                loaded_annotation_ready = True
                 console_message(f"Loaded anonymized file directly into the annotation stage: {os.path.basename(file_path)}", level="info")
 
         update_patient_id_from_loaded_ids(loaded_patient_ids)
+        if loaded_annotation_ready:
+            if os.path.normpath(active_package_root or "") == folder_path and active_package_name:
+                set_active_package_context(
+                    folder_path,
+                    package_name=active_package_name,
+                    cleanup_on_export=active_package_cleanup_on_export,
+                )
+            else:
+                set_active_package_context(
+                    folder_path,
+                    package_name=os.path.basename(folder_path.rstrip("\\/")),
+                    cleanup_on_export=path_is_within(folder_path, output_path),
+                )
 
         console_message("loaded dicom files successfully from folder with filedialog",level="info")
         temp_output_dir = None
@@ -1230,6 +1308,25 @@ def insert_ordered_file(file_name, file_path, tag_value, x0_value, y0_value, x1_
         values=(file_name, file_path, tag_value, x0_value, y0_value, x1_value, y1_value, num_of_frames, applied),
         tags=get_tree_item_tags(file_path),
     )
+
+
+def add_file_to_ordered(file_path, warn_if_duplicate=True):
+    file_name = os.path.basename(file_path)
+    ds = pydicom.dcmread(file_path, stop_before_pixels=True)
+    num_of_frames = get_nr_frames(ds)
+
+    all_files_from_ordered = [ordered_files_treeview.item(item, "values")[1] for item in ordered_files_treeview.get_children()]
+    if file_path in all_files_from_ordered:
+        if warn_if_duplicate:
+            messagebox.showwarning("Warning", f"The file '{file_name}' is already in the ordered list.")
+        return None
+
+    inserted_item = insert_ordered_file(file_name, file_path, get_default_tag_for_file(file_path), 0, 0, 0, 0, num_of_frames, 0)
+    files_in_ordered = len(ordered_files_treeview.get_children())
+    frame_1.config(text=f"{files_in_ordered} Ordered files")
+    refresh_workflow_action_state()
+    return inserted_item
+
 
 def list_files_from_dir(output_directory):
     for filename in os.listdir(output_directory):
@@ -1278,41 +1375,17 @@ def add_selected_file_to_ordered():
         messagebox.showwarning("Warning", "Please select only one file to add.")
         return
 
-    #Λήψη του file_name και του file_path από το επιλεγμένο στοιχείο
-    file_name = selected_files_treeview.item(selected_items[0], "values")[0]
     file_path = selected_files_treeview.item(selected_items[0], "values")[1]
-
-    ds = pydicom.dcmread(file_path, stop_before_pixels=True)
-    num_of_frames = get_nr_frames(ds)
-    
-    #έλεγχος αν το αρχείο υπάρχει ήδη στο ordered_files_treeview
-    all_files_from_ordered = [ordered_files_treeview.item(item, "values")[1] for item in ordered_files_treeview.get_children()]
-
-    if file_path in all_files_from_ordered:
-        messagebox.showwarning("Warning", f"The file '{file_name}' is already in the ordered list.")
-        return  #το αρχείο υπάρχει ήδη, δεν το ξανά προσθέτουμε
-
-    tag_value = get_default_tag_for_file(file_path)
-    x0_value = 0
-    y0_value = 0
-    x1_value = 0
-    y1_value = 0
-    applied = 0
-    
-    #προσθήκη του αρχείου στο ordered_files_treeview αν δεν υπάρχει ήδη
-    insert_ordered_file(file_name, file_path, tag_value, x0_value, y0_value,
-                        x1_value, y1_value, num_of_frames, applied)
+    inserted_item = add_file_to_ordered(file_path)
+    if inserted_item is None:
+        return
 
     #αφαίρεση του αρχείου από το selected_files_treeview
     selected_files_treeview.delete(selected_items[0])
 
-    files_in_ordered = len(ordered_files_treeview.get_children())
-    frame_1.config(text=f"{files_in_ordered} Ordered files")
-    refresh_workflow_action_state()
-    
 
     #δημιουργία του log msg
-    console_message(f"moved {file_name} from selected_files_treeview to ordered_files_treeview",level="debug")
+    console_message(f"moved {os.path.basename(file_path)} from selected_files_treeview to ordered_files_treeview",level="debug")
 
 def add_all_from_selected_file_to_ordered():
     #λήψη όλων των  αρχείων από το selected_files_treeview
@@ -1324,29 +1397,11 @@ def add_all_from_selected_file_to_ordered():
 
     #μεταφορά όλων των αρχείων στο ordered_files_treeview
     for item in selected_items:
-        file_name = selected_files_treeview.item(item, "values")[0]
         file_path = selected_files_treeview.item(item, "values")[1]
+        if add_file_to_ordered(file_path, warn_if_duplicate=False) is None:
+            continue
 
-        ds = pydicom.dcmread(file_path, stop_before_pixels=True)
-        num_of_frames = get_nr_frames(ds)
-        
-        #έλεγχος αν το αρχείο υπάρχει ήδη στο ordered_files_treeview
-        all_files_from_ordered = [ordered_files_treeview.item(child, "values")[1] for child in ordered_files_treeview.get_children()]
-
-        if file_path in all_files_from_ordered:
-           continue  #αν το αρχείο υπάρχει ήδη το παραλείπει
-        
-        tag_value = get_default_tag_for_file(file_path)
-        x0_value = 0
-        y0_value = 0
-        x1_value = 0
-        y1_value = 0
-        applied = 0
-        
-        insert_ordered_file(file_name, file_path, tag_value, x0_value, y0_value,
-                            x1_value, y1_value, num_of_frames, applied)
-
-        console_message(f"moved {file_name} from selected_files_treeview to ordered_files_treeview", level="debug")
+        console_message(f"moved {os.path.basename(file_path)} from selected_files_treeview to ordered_files_treeview", level="debug")
 
     #αφαίρεση όλων των τιμών από το selected_files_treeview
     selected_files_treeview.delete(*selected_items)
@@ -1354,6 +1409,34 @@ def add_all_from_selected_file_to_ordered():
     files_in_ordered = len(ordered_files_treeview.get_children())
     frame_1.config(text=f"{files_in_ordered} Ordered files")
     refresh_workflow_action_state()
+
+
+def add_anonymized_file_to_ordered_debug():
+    if not debug_allow_all_steps():
+        messagebox.showinfo(
+            "Debug workflow",
+            "Enable 'Debug: allow all workflow steps for anonymized files' in Settings and restart the app.",
+        )
+        return
+
+    selected_items = anonimyzed_files_treeview.selection()
+    if len(selected_items) == 0:
+        messagebox.showwarning("Warning", "Please select a file to add.")
+        return
+
+    if len(selected_items) > 1:
+        messagebox.showwarning("Warning", "Please select only one file to add.")
+        return
+
+    file_path = anonimyzed_files_treeview.item(selected_items[0], "values")[1]
+    inserted_item = add_file_to_ordered(file_path)
+    if inserted_item is None:
+        return
+
+    ordered_files_treeview.selection_set(inserted_item)
+    ordered_files_treeview.focus(inserted_item)
+    ordered_files_treeview.see(inserted_item)
+    console_message(f"added {os.path.basename(file_path)} from anonymized_files_treeview to ordered_files_treeview for debug cropping", level="info")
 
     messagebox.showinfo("Success", "All selected files have been added to the ordered list.")
 
@@ -1435,6 +1518,7 @@ def clear_anon_treeview():
     items = anonimyzed_files_treeview.get_children()
     for item in items:
         anonimyzed_files_treeview.delete(item)
+    clear_active_package_context()
     refresh_workflow_action_state()
         
 #την εκτελούμε όταν θελουμε να ακυρώσουμε μια ανωνυμοποίηση
@@ -1459,6 +1543,7 @@ def clear_anon_treeview2():
     items = anonimyzed_files_treeview.get_children()
     for item in items:
         anonimyzed_files_treeview.delete(item)
+    clear_active_package_context()
 
     id_entry_entry.config(state="normal", text="")
     id_entry_entry.delete(0, "end")
@@ -1489,7 +1574,7 @@ def preview_selected_file(treeview, source_stage):
     file_path = tree_values[1]
     #print(tree_values[7])
 
-    if source_stage != "Anonymized files" and is_file_ready_for_annotation(file_path):
+    if should_force_annotation_stage(source_stage, is_file_ready_for_annotation(file_path), debug_allow_all_steps()):
         source_stage = "Anonymized files"
 
     set_preview_frame_title(file_path)
@@ -1530,65 +1615,44 @@ def load_zip_and_display():
         global zcount
         try:
             console_message("try to read zipped files",level="debug")
-            with zipfile.ZipFile(zip_file_path, 'a') as archive:
-                #archive.printdir()# print for debug
+            with zipfile.ZipFile(zip_file_path, 'r') as archive:
                 dicom_files = []
-                json_files = []
 
-                for file in archive.namelist():#διαβλαζω το κάθε αρχείο απο τη namelist
-                    # Also collect JSON annotation files
-                    if file.lower().endswith('.json'):
-                        json_files.append(file)
+                for file in archive.namelist():
+                    if file.endswith("/"):
                         continue
                     with archive.open(file) as f:
-                        try:# ελέγχω αν το αρχείο είναι τύπου dicom. ακόμη και αν δεν εχει κατάληξη .dcm
-                            ds = pydicom.dcmread(f)
+                        try:
+                            pydicom.dcmread(f, stop_before_pixels=True)
                             dicom_files.append(file)
-                        except pydicom.errors.InvalidDicomError as e:
-                            #print(f"{file} is not a valid DICOM file, skipped")
-                            console_message(f"skipped non valid dicom file, {e}",level="error")
+                        except pydicom.errors.InvalidDicomError:
                             continue
-                
+
                 if not dicom_files:
-                    #print("No DICOM files found in the ZIP archive.")
                     return
 
                 console_message(f"Total DICOM files found: {len(dicom_files)}", level="debug")
 
-                #δημιουργία temp φακέλου για την αποθήκευση DICOM αρχείων απο zip folder
                 global temp_output_dir, output_path
-                #output_dir = os.path.join(os.getcwd(), "temp_dicom_files")
-                #παίρνω το τρέχον path απο εκεί που τρέχει και το python αρχείο
-                #print("in zip, ", output_path)
                 zcount += 1
                 temp_output_dir = os.path.join(output_path, f"temp_unzipped_files_0{zcount}")
+                if os.path.isdir(temp_output_dir):
+                    shutil.rmtree(temp_output_dir)
                 os.makedirs(temp_output_dir, exist_ok=True)
                 temp_output_dir = os.path.normpath(temp_output_dir)
-                #print("Temp output: ",temp_output_dir)
 
-                #αποθήκευση κάθε DICOM αρχείου στον φάκελο "temp_dicom_files"
-                countZ = 0
-                for dicom_file in dicom_files:
-                   
-                    unziped_file_path = os.path.join(temp_output_dir, os.path.basename(dicom_file))
-                    #print("Unzipped file path: ", unziped_file_path)
-                    with archive.open(dicom_file) as file:
-                        with open(unziped_file_path, 'wb') as output_file:
-                            output_file.write(file.read())
-                            countZ += 1
-                    console_message(f"Total saved files to temp folder: {countZ}", level="debug")
+                extracted_count = extract_zip_package(zip_file_path, temp_output_dir)
 
-                # Also extract JSON annotation files
-                for json_file in json_files:
-                    json_out_path = os.path.join(temp_output_dir, os.path.basename(json_file))
-                    with archive.open(json_file) as jf:
-                        with open(json_out_path, 'wb') as output_file:
-                            output_file.write(jf.read())
-                    console_message(f"Extracted annotation JSON: {json_out_path}", level="debug")
+                console_message(f"Extracted {extracted_count} files from ZIP package", level="debug")
 
-            load_folder()
+            set_active_package_context(
+                temp_output_dir,
+                package_name=os.path.splitext(os.path.basename(zip_file_path))[0],
+                cleanup_on_export=True,
+            )
+            load_folder(temp_output_dir)
             loading_popup.destroy()
-            file_count = sum(len(files) for _, _, files in os.walk(output_path))
+            file_count = sum(len(files) for _, _, files in os.walk(temp_output_dir))
             foot_label1.config(text=f"{file_count} files\nat temp folder")
 
         except zipfile.BadZipFile as e:
@@ -2441,93 +2505,17 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             else:
                 crop_identifier_status = 0
                 ##αν το SN δεν υπάρχει στο INI, skip και εμφανίζει μήνυμα
-                console_message(f"SN {device_sn} not found in ini.", level="warning")
+                console_message(f"Identifier {crop_identifier} not found in ini.", level="warning")
                 #messagebox.showwarning("Read crop area", f"Crop identifier {crop_identifier} not found in ini.\nAutomatic cropping will be applied.\nAdd the device ID and crop areas to settings file\nor apply manual crop.")
                 ##crop_x0, crop_y0, crop_x1, crop_y1 = [0, 0, columnsNo, rowsNo]
                 ##selected_crop = [0, 0, columnsNo, rowsNo]
 
-                try:                    
-                    #δοκιμάζει auto crop παίρνοντας τις τιμές απο τα tags και εφαρμόζει ένα πιο σφιχτό cropping
-                    sequence_element = ds[0x0018, 0x6011]
-                    sequence = sequence_element.value
-                    item = sequence[0]
-                
-                    crop_x0 = item[0x0018, 0x6018].value
-                    crop_y0 = item[0x0018, 0x601a].value
-                    crop_x1 = item[0x0018, 0x601c].value
-                    crop_y1 = item[0x0018, 0x601e].value
-                    
-                    fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
-                    img = pixel_array(ds, index=fr_index)[crop_y0:crop_y1, crop_x0:crop_x1]
-                    
-                    if len(img.shape) > 2:
-                        grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-                    else:
-                        grayscale = img
-
-                    # Threshold the image
-                    _, thresholded = cv.threshold(grayscale, 1, 255, 0)  # Hack put '1, 255, 0' and not '0, 255, 0' for FR1
-
-                    # Find contours
-                    contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-                    
-                    areas = [cv.contourArea(c) for c in contours]
-                    max_index = np.argmax(areas)
-                    cnt=contours[max_index]
-                    x,y,w,h = cv.boundingRect(cnt)
-                    
-                    crop_x0, crop_y0, crop_x1, crop_y1 = [crop_x0+x, crop_y0+y, crop_x0+x+w, crop_y0+y+h]
-                    
-                except:
-                    #αν δεν υπάρχουν οι τιμές X0,X1,Y0,Y1 στα tags εφαρμόζει auto crop απο όλη την εικόνα
-                    fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
-
-                    img = pixel_array(ds, index=fr_index)
-
-                    if len(img.shape) > 2:
-                        grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-                    else:
-                        grayscale = img
-
-                    # Threshold the image
-                    _, thresholded = cv.threshold(grayscale, 1, 255, 0)  # Hack put '1, 255, 0' and not '0, 255, 0' for FR1
-
-                    # Find contours
-                    contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-                    
-                    # Get image center
-                    image_center = np.array([img.shape[1] / 2, img.shape[0] / 2])
-
-                    # Compute areas and sort contours by area descending
-                    areas = [cv.contourArea(c) for c in contours]
-                    sorted_indices = np.argsort(areas)[::-1]  # descending order
-
-                    # Take top 3 contours (this could be 1 in case that the image already cropped using the predifined default area per US device)
-                    top_indices = sorted_indices[:3]
-                    top_contours = [contours[i] for i in top_indices]
-
-                    # Find contour among top 3 closest to center
-                    min_distance = float('inf')
-                    closest_cnt = None
-
-                    for cnt in top_contours:
-                        M = cv.moments(cnt)
-                        if M["m00"] != 0:
-                            cx = int(M["m10"] / M["m00"])
-                            cy = int(M["m01"] / M["m00"])
-                            center = np.array([cx, cy])
-                            distance = np.linalg.norm(center - image_center)
-                            if distance < min_distance:
-                                min_distance = distance
-                                closest_cnt = cnt
-
-                    # Get bounding box and crop
-                    if closest_cnt is not None:
-                        x, y, w, h = cv.boundingRect(closest_cnt)
-                        crop_x0, crop_y0, crop_x1, crop_y1 = [x, y, x+w, y+h]
-                    else:
-                        crop_x0, crop_y0, crop_x1, crop_y1 = [0, 0, columnsNo, rowsNo]
-
+                selected_crop = detect_dicom_autocrop_box(
+                    ds,
+                    preferred_frame_index=current_frame_index,
+                    method="hybrid",
+                )
+                crop_x0, crop_y0, crop_x1, crop_y1 = selected_crop
                 selected_crop = crop_x0, crop_y0, crop_x1, crop_y1
                 console_message(f"Autocrop applied for ID: {crop_identifier}, Crop area: {selected_crop}", level="info")
 
@@ -2536,41 +2524,12 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             #αν οι τιμές δεν είναι σωστά περασμένες skip και εμφανίζει μήνυμα
             console_message(f"Failed to read crop data for identifier {crop_identifier}: {str(e)}", level="error")
             messagebox.showerror("Read crop area", f"Error while reading crop data for identifier  {crop_identifier}: {str(e)}.\nCheck settings file or apply manual crop.")
-            #crop_x_start, crop_y_start, crop_x_end, crop_y_end = [0, 0, columnsNo, rowsNo]#αναθέλω τιμές για όλη την εικόνα
-
-            #στη συνέχεια
-            #αναθέτω τιμές για την περιοχή βάση των tag που υπάρχουν
-            crop_x0 = item[0x0018, 0x6018].value
-            crop_y0 = item[0x0018, 0x601a].value
-            crop_x1 = item[0x0018, 0x601c].value
-            crop_y1 = item[0x0018, 0x601e].value
-            
-            #num_fr = get_nr_frames(ds)
-            #fr_index = 0
-            #if num_fr > 1:
-                #fr_index = random.randint(0, num_fr)
-            fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
-                    
-            img = pixel_array(ds, index=fr_index)[crop_y0:crop_y1, crop_x0:crop_x1]
-            
-            if len(img.shape) > 2:
-                grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-            else:
-                grayscale = img
-
-            # Threshold the image
-            _, thresholded = cv.threshold(grayscale, 1, 255, 0)  # Hack put '1, 255, 0' and not '0, 255, 0' for FR1
-
-            # Find contours
-            contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-                    
-            areas = [cv.contourArea(c) for c in contours]
-            max_index = np.argmax(areas)
-            cnt=contours[max_index]
-            x,y,w,h = cv.boundingRect(cnt)
-                    
-            crop_x0, crop_y0, crop_x1, crop_y1 = [crop_x0+x, crop_y0+y, crop_x0+x+w, crop_y0+y+h]
-            
+            selected_crop = detect_dicom_autocrop_box(
+                ds,
+                preferred_frame_index=current_frame_index,
+                method="hybrid",
+            )
+            crop_x0, crop_y0, crop_x1, crop_y1 = selected_crop
             selected_crop = crop_x0, crop_y0, crop_x1, crop_y1
 
         #διαβάζω τις τιμές x0,x1,y0,y1 απο το treeview
@@ -2583,61 +2542,91 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
         crop_info_frame = tk.LabelFrame(info_frame, text="Crop area", font=("Segoe UI", 8), height=35)
         crop_info_frame.grid(row=1, column=0, sticky="nsew")
+        crop_info_frame.grid_columnconfigure(0, weight=1)
+        crop_info_frame.grid_columnconfigure(1, weight=1)
+        crop_info_frame.grid_columnconfigure(2, weight=1)
+        crop_info_frame.grid_columnconfigure(3, weight=1)
 
-        x0_label = tk.Label(crop_info_frame, text="X_min", font=("Segoe UI", 8))
-        x0_label.grid(row=0, column=0, sticky="nsew")
+        crop_hint_label = tk.Label(
+            crop_info_frame,
+            text="Drag the box on the preview: drag inside to move, drag edges or corners to resize.",
+            font=("Segoe UI", 7),
+            fg="gray",
+        )
+        crop_hint_label.grid(row=0, column=0, columnspan=4, padx=3, sticky="w")
 
-        crop_x_start_var = tk.IntVar(value=crop_x_start)
-        x0_spnb = tk.Spinbox(crop_info_frame, textvariable=crop_x_start_var, width = 4,
-                             from_=0, to=columnsNo)
-        x0_spnb.grid(row=0, column=1, sticky="nsew")
-        
-        y0_label = tk.Label(crop_info_frame, text="Y_min", font=("Segoe UI", 8))
-        y0_label.grid(row=0, column=2, sticky="nsew")
-
-        crop_y_start_var = tk.IntVar(value=crop_y_start)
-        y0_spnb = tk.Spinbox(crop_info_frame, textvariable=crop_y_start_var, width = 4,
-                             from_=0, to=rowsNo)
-        y0_spnb.grid(row=0, column=3, sticky="nsew")
-
-        x1_label = tk.Label(crop_info_frame, text="X_max", font=("Segoe UI", 8))
-        x1_label.grid(row=1, column=0, sticky="nsew")
-
-        crop_x_end_var = tk.IntVar(value=crop_x_end)
-        x1_spnb = tk.Spinbox(crop_info_frame, textvariable=crop_x_end_var, width = 4,
-                             from_=0, to=columnsNo)
-        x1_spnb.grid(row=1, column=1, sticky="nsew")
-
-        y1_label = tk.Label(crop_info_frame, text="Y_max", font=("Segoe UI", 8))
-        y1_label.grid(row=1, column=2, sticky="nsew")
-
-        crop_y_end_var = tk.IntVar(value=crop_y_end)
-        y1_spnb = tk.Spinbox(crop_info_frame, textvariable=crop_y_end_var, width = 4,
-                             from_=0, to=rowsNo)
-        y1_spnb.grid(row=1, column=3, sticky="nsew")
-        
+        crop_x_start_var = tk.IntVar(value=int(crop_x_start))
+        crop_y_start_var = tk.IntVar(value=int(crop_y_start))
+        crop_x_end_var = tk.IntVar(value=int(crop_x_end))
+        crop_y_end_var = tk.IntVar(value=int(crop_y_end))
+        crop_coords_var = tk.StringVar()
         applied_value = int(current_values[8])
-        
-        #print("applied_value: ",applied_value)
+
+        crop_coords_label = tk.Label(
+            crop_info_frame,
+            textvariable=crop_coords_var,
+            font=("Segoe UI", 8),
+        )
+        crop_coords_label.grid(row=1, column=0, columnspan=4, padx=3, sticky="w")
+
         crop_values = {
-                "x0": x0_spnb,
-                "y0": y0_spnb,
-                "x1": x1_spnb,
-                "y1": y1_spnb
-                }
-        #print(type(crop_values))
+            "x0": crop_x_start_var,
+            "y0": crop_y_start_var,
+            "x1": crop_x_end_var,
+            "y1": crop_y_end_var
+        }
+        crop_state = {
+            "applied": applied_value,
+            "drag_mode": None,
+            "drag_anchor": None,
+            "drag_start_box": None,
+            "handle_size": 6,
+            "hit_padding": 10,
+        }
 
-        def crop_callback(var, index, mode, variable):
-            try:
-                apply_crop_frames(crop_values)
-            except Exception as e:
-                messagebox.showerror("Error", f"{e}")
+        def get_current_crop_box():
+            return (
+                int(crop_x_start_var.get()),
+                int(crop_y_start_var.get()),
+                int(crop_x_end_var.get()),
+                int(crop_y_end_var.get()),
+            )
 
-        #παρακολούθηση μεταβλητών
-        crop_x_start_var.trace_add("write", lambda var, index, mode: crop_callback(var, index, mode, crop_x_start_var))
-        crop_y_start_var.trace_add("write", lambda var, index, mode: crop_callback(var, index, mode, crop_y_start_var))
-        crop_x_end_var.trace_add("write", lambda var, index, mode: crop_callback(var, index, mode, crop_x_end_var))
-        crop_y_end_var.trace_add("write", lambda var, index, mode: crop_callback(var, index, mode, crop_y_end_var))
+        def refresh_crop_status():
+            x0, y0, x1, y1 = get_current_crop_box()
+            crop_coords_var.set(
+                f"X: {x0}-{x1}  Y: {y0}-{y1}  Size: {x1 - x0} x {y1 - y0}"
+            )
+
+        def preview_current_crop(applied=None):
+            if applied is not None:
+                crop_state["applied"] = int(applied)
+            refresh_crop_status()
+            if 'img_label' in globals() and img_label is not None and img_label.winfo_exists():
+                x0, y0, x1, y1 = get_current_crop_box()
+                update_image_with_crop_area(
+                    frame_index=current_frame_index,
+                    crop_x_start=x0,
+                    crop_y_start=y0,
+                    crop_x_end=x1,
+                    crop_y_end=y1,
+                    applied_value=crop_state["applied"]
+                )
+
+        def set_current_crop_box(box, applied=None, redraw=True):
+            x0, y0, x1, y1 = clamp_crop_box(tuple(int(value) for value in box), columnsNo, rowsNo)
+            crop_x_start_var.set(x0)
+            crop_y_start_var.set(y0)
+            crop_x_end_var.set(x1)
+            crop_y_end_var.set(y1)
+            if redraw:
+                preview_current_crop(applied=applied)
+            else:
+                if applied is not None:
+                    crop_state["applied"] = int(applied)
+                refresh_crop_status()
+
+        refresh_crop_status()
 
         highlightNo = 0
         def apply_crop_values(treeview, selected_item, crop_values, highlightNo, var_apply, is_multiframe):
@@ -2645,7 +2634,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
             if apply_var==1:
                 response = messagebox.askyesno("Apply to all?", "Do you want to apply this\ncrop area to all files?")
-                if response =="yes":
+                if not response:
                     return
             
             #λαμβάνω τις τιμές απο το λεξικό
@@ -2679,14 +2668,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 treeview.item(selected_item, values=updated_values)
                 
                 #για να αλλάξω το χρώμα σε πράσινο
-                update_image_with_crop_area(
-                                frame_index=current_frame_index,
-                                crop_x_start=x0,
-                                crop_y_start=y0,
-                                crop_x_end=x1,
-                                crop_y_end=y1,
-                                applied_value=1
-                                )
+                preview_current_crop(applied=1)
 
                 #current_values = treeview.item(selected_item, "values")
                 treeview.tag_configure(f"highlight_{highlightNo}", background="lightgreen")
@@ -2741,23 +2723,16 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                             highlightNo += 1
                         else:
                             pass
+                preview_current_crop(applied=1)
 
-        def apply_crop_frames(crop_values):#εκτελειτε όταν πατάει το spinbox button
+        def apply_crop_frames(crop_values):
             #λαμβάνω τις τιμές απο το λεξικό
             x0 = crop_values["x0"].get()
             y0 = crop_values["y0"].get()
             x1 = crop_values["x1"].get()
             y1 = crop_values["y1"].get()
 
-            #για να αλλάξω το χρώμα σε κοκκινο
-            update_image_with_crop_area(
-                                    frame_index=current_frame_index,
-                                    crop_x_start=x0,
-                                    crop_y_start=y0,
-                                    crop_x_end=x1,
-                                    crop_y_end=y1,
-                                    applied_value=0
-                                    )
+            set_current_crop_box((x0, y0, x1, y1), applied=0)
 
       
         def add_to_devices(crop_values, crop_identifier):
@@ -2781,15 +2756,13 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 new_device_value = f"[{crop_identifier}],[{x0},{y0},{x1},{y1}],[{x0},{y0},{x1},{y1}]"
                 config["devices"][new_device_key] = new_device_value
                 
-                #αποθήκευση των τιμών στο αρχείο settings.ini
-                with open(settings_file_path, 'w') as configfile:
-                    config.write(configfile)
+                write_config_atomic(settings_file_path, config)
 
                 messagebox.showinfo("Add device",f"Crop areas added to settings file as {new_device_key}\nwith values {new_device_value}\nRestart the app to make effect.")
             except Exception as e:
                 messagebox.showerror("Add device",f"Error: {e}")
                 
-        
+
         crop_values_apply_btn = ttk.Button(crop_info_frame, text="Apply", style="apply.TButton",
                                            command = lambda: apply_crop_values(treeview, selected_item, crop_values, highlightNo, var_apply, is_multiframe))
         crop_values_apply_btn.grid(row=0, column=4, padx=3, sticky="w")
@@ -2802,232 +2775,28 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                                            command = lambda: add_to_devices(crop_values, crop_identifier))
         crop_values_add_btn.grid(row=1, column=4, padx=3, sticky="w")
 
+        def apply_detected_crop(method, label):
+            crop_x0, crop_y0, crop_x1, crop_y1 = detect_dicom_autocrop_box(
+                ds,
+                preferred_frame_index=current_frame_index,
+                method=method,
+            )
+
+            set_current_crop_box((crop_x0, crop_y0, crop_x1, crop_y1), applied=0)
+            console_message(f"Auto-crop manually triggered using {label}.", level="info")
+
         def trigger_auto_crop(ds):
-            try:
-                sequence_element = ds[0x0018, 0x6011]
-                sequence = sequence_element.value
-                item = sequence[0]
-                
-                crop_x0 = item[0x0018, 0x6018].value
-                crop_y0 = item[0x0018, 0x601a].value
-                crop_x1 = item[0x0018, 0x601c].value
-                crop_y1 = item[0x0018, 0x601e].value
+            apply_detected_crop("hybrid", "hybrid")
 
-                fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
-                img = pixel_array(ds, index=fr_index)[crop_y0:crop_y1, crop_x0:crop_x1]
-                    
-                if len(img.shape) > 2:
-                    grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-                else:
-                    grayscale = img
-
-                # Threshold the image
-                _, thresholded = cv.threshold(grayscale, 1, 255, 0)  # Hack put '1, 255, 0' and not '0, 255, 0' for FR1
-
-                # Find contours
-                contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-                
-                areas = [cv.contourArea(c) for c in contours]
-                max_index = np.argmax(areas)
-                cnt=contours[max_index]
-                x,y,w,h = cv.boundingRect(cnt)
-                    
-                crop_x0, crop_y0, crop_x1, crop_y1 = [crop_x0+x, crop_y0+y, crop_x0+x+w, crop_y0+y+h]
-
-            except:
-                fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
-                img = pixel_array(ds, index=fr_index)
-                #crop_x0, crop_y0, crop_x1, crop_y1 = 0, 0, columnsNo, rowsNo
-
-                if len(img.shape) > 2:
-                    grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-                else:
-                    grayscale = img
-
-                _, thresholded = cv.threshold(grayscale, 1, 255, 0)
-                contours, _ = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-
-                if len(contours) == 0:
-                    x, y, w, h = 0, 0, columnsNo, rowsNo
-                else:
-                    areas = [cv.contourArea(c) for c in contours]
-                    sorted_indices = np.argsort(areas)[::-1]
-                    top_contours = [contours[i] for i in sorted_indices[:3]]
-
-                    image_center = np.array([img.shape[1] / 2, img.shape[0] / 2])
-                    min_distance = float('inf')
-                    closest_cnt = None
-
-                    for cnt in top_contours:
-                        M = cv.moments(cnt)
-                        if M["m00"] != 0:
-                            cx = int(M["m10"] / M["m00"])
-                            cy = int(M["m01"] / M["m00"])
-                            center = np.array([cx, cy])
-                            dist = np.linalg.norm(center - image_center)
-                            if dist < min_distance:
-                                min_distance = dist
-                                closest_cnt = cnt
-
-                    if closest_cnt is not None:
-                        x, y, w, h = cv.boundingRect(closest_cnt)
-                    else:
-                        x, y, w, h = 0, 0, columnsNo, rowsNo
-
-            crop_x_start_var.set(crop_x0)
-            crop_y_start_var.set(crop_y0)
-            crop_x_end_var.set(crop_x1)
-            crop_y_end_var.set(crop_y1)
-
-            update_image_with_crop_area(
-                frame_index=current_frame_index,
-                crop_x_start=crop_x0,
-                crop_y_start=crop_y0,
-                crop_x_end=crop_x1,
-                crop_y_end=crop_y1,
-                applied_value=0
-            )
-
-            console_message("Auto-crop manually triggered.", level="info")
-
-        def trigger_auto_crop_2(ds): 
-            try: 
-                sequence_element = ds[0x0018, 0x6011]
-                sequence = sequence_element.value
-                item = sequence[0]
-                
-                crop_x0 = item[0x0018, 0x6018].value
-                crop_y0 = item[0x0018, 0x601a].value
-                crop_x1 = item[0x0018, 0x601c].value
-                crop_y1 = item[0x0018, 0x601e].value
-
-                fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
-                img = pixel_array(ds, index=fr_index)[crop_y0:crop_y1, crop_x0:crop_x1]
-                    
-                if len(img.shape) > 2:
-                    grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-                else:
-                    grayscale = img
-
-                #Get the mode (most common pixel value)
-                counts = np.bincount(grayscale.flatten())
-                background_mode = np.argmax(counts)
-
-                clean_image = grayscale.copy()
-
-                # We use a small range (e.g., mode +/- 2) to catch slight compression noise
-                lower_bound = max(0, background_mode - 2)
-                upper_bound = min(255, background_mode + 2)
-
-                # Set pixels in that gray range to 0 (Black)
-                mask = (clean_image >= lower_bound) & (clean_image <= upper_bound)
-                mask = (mask.astype('uint8')) * 255 # Convert boolean mask to uint8 required by cv2 functions
-
-                kernel = np.ones((5, 5), np.uint8)
-                
-                # Work on the mask
-                mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel, iterations=3)
-                mask = cv.morphologyEx(mask, cv.MORPH_OPEN, kernel, iterations=6)
-                mask = mask.astype(bool)
-                clean_image[mask] = 0
-
-                # Threshold the image
-                _, thresholded = cv.threshold(clean_image, 1, 255, 0)
-
-                # Find contours
-                contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-                
-                areas = [cv.contourArea(c) for c in contours]
-                max_index = np.argmax(areas)
-                cnt=contours[max_index]
-                x,y,w,h = cv.boundingRect(cnt)
-                    
-                crop_x0, crop_y0, crop_x1, crop_y1 = [crop_x0+x, crop_y0+y, crop_x0+x+w, crop_y0+y+h]
-
-            except:
-                fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
-                img = pixel_array(ds, index=fr_index)
-                #crop_x0, crop_y0, crop_x1, crop_y1 = 0, 0, columnsNo, rowsNo
-
-                if len(img.shape) > 2:
-                    grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-                else:
-                    grayscale = img
-
-                #Get the mode (most common pixel value)
-                counts = np.bincount(grayscale.flatten())
-                background_mode = np.argmax(counts)
-
-                clean_image = grayscale.copy()
-
-                # We use a small range (e.g., mode +/- 2) to catch slight compression noise
-                lower_bound = max(0, background_mode - 2)
-                upper_bound = min(255, background_mode + 2)
-
-                # Set pixels in that gray range to 0 (Black)
-                mask = (clean_image >= lower_bound) & (clean_image <= upper_bound)
-                mask = (mask.astype('uint8')) * 255 # Convert boolean mask to uint8 required by cv2 functions
-
-                kernel = np.ones((5, 5), np.uint8)
-                
-                # Work on the mask
-                mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel, iterations=3)
-                mask = cv.morphologyEx(mask, cv.MORPH_OPEN, kernel, iterations=6)
-                mask = mask.astype(bool)
-                clean_image[mask] = 0    
-
-                _, thresholded = cv.threshold(clean_image, 1, 255, 0)
-                contours, _ = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-
-                if len(contours) == 0:
-                    x, y, w, h = 0, 0, columnsNo, rowsNo
-                else:
-                    areas = [cv.contourArea(c) for c in contours]
-                    sorted_indices = np.argsort(areas)[::-1]
-                    top_contours = [contours[i] for i in sorted_indices[:3]]
-
-                    image_center = np.array([img.shape[1] / 2, img.shape[0] / 2])
-                    min_distance = float('inf')
-                    closest_cnt = None
-
-                    for cnt in top_contours:
-                        M = cv.moments(cnt)
-                        if M["m00"] != 0:
-                            cx = int(M["m10"] / M["m00"])
-                            cy = int(M["m01"] / M["m00"])
-                            center = np.array([cx, cy])
-                            dist = np.linalg.norm(center - image_center)
-                            if dist < min_distance:
-                                min_distance = dist
-                                closest_cnt = cnt
-
-                    if closest_cnt is not None:
-                        x, y, w, h = cv.boundingRect(closest_cnt)
-                    else:
-                        x, y, w, h = 0, 0, columnsNo, rowsNo
-
-            crop_x_start_var.set(crop_x0)
-            crop_y_start_var.set(crop_y0)
-            crop_x_end_var.set(crop_x1)
-            crop_y_end_var.set(crop_y1)
-
-            update_image_with_crop_area(
-                frame_index=current_frame_index,
-                crop_x_start=crop_x0,
-                crop_y_start=crop_y0,
-                crop_x_end=crop_x1,
-                crop_y_end=crop_y1,
-                applied_value=0
-            )
-
-            console_message("Auto-crop manually triggered.", level="info")
+        def trigger_auto_crop_2(ds):
+            apply_detected_crop("mode", "mode-clean")
 
             
         auto_btn = ttk.Button(crop_info_frame, text="Auto", style="small.TButton", width=6,
                                            command = lambda: trigger_auto_crop(ds))
         auto_btn.grid(row=1, column=5, padx=3, sticky="w")
 
-        auto.btn2 = ttk.Button(crop_info_frame, text="Auto_2", style="small.TButton", width=6,
+        auto.btn2 = ttk.Button(crop_info_frame, text="Mode", style="small.TButton", width=6,
                                              command = lambda: trigger_auto_crop_2(ds))
         auto.btn2.grid(row=1, column=6, padx=3, sticky="w")
         
@@ -3081,7 +2850,11 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                                         orient=tk.HORIZONTAL,
                                         activebackground="#33A1C9",
                                         font=("Segoe UI", 8),
-                                        command=lambda val: update_image_with_crop_area(int(val),crop_x_start, crop_y_start, crop_x_end, crop_y_end, applied_value))#θέλει μετατροπή σε integer 
+                                        command=lambda val: update_image_with_crop_area(
+                                            int(val),
+                                            *get_current_crop_box(),
+                                            crop_state["applied"],
+                                        ))#θέλει μετατροπή σε integer 
 
                 else:
                     video_slider = tk.Scale(info_frame, from_=0, to=num_frames-1,label="Video Slider",
@@ -3113,9 +2886,153 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 if not annotation_drawing_mode:
                     plot_image(pixel_array(ds, index=current_frame_index), source_stage)
 
+            def canvas_to_image_point(event):
+                x = int(round(event.x / annotation_scale_x)) if annotation_scale_x else 0
+                y = int(round(event.y / annotation_scale_y)) if annotation_scale_y else 0
+                x = min(max(0, x), max(0, columnsNo - 1))
+                y = min(max(0, y), max(0, rowsNo - 1))
+                return x, y
+
+            def current_crop_canvas_box():
+                x0, y0, x1, y1 = get_current_crop_box()
+                return (
+                    x0 * annotation_scale_x,
+                    y0 * annotation_scale_y,
+                    x1 * annotation_scale_x,
+                    y1 * annotation_scale_y,
+                )
+
+            def get_crop_drag_mode(event):
+                if source_stage != "Ordered files":
+                    return None
+
+                x0, y0, x1, y1 = current_crop_canvas_box()
+                pad = crop_state["hit_padding"]
+
+                near_left = abs(event.x - x0) <= pad and y0 - pad <= event.y <= y1 + pad
+                near_right = abs(event.x - x1) <= pad and y0 - pad <= event.y <= y1 + pad
+                near_top = abs(event.y - y0) <= pad and x0 - pad <= event.x <= x1 + pad
+                near_bottom = abs(event.y - y1) <= pad and x0 - pad <= event.x <= x1 + pad
+                inside = x0 + pad < event.x < x1 - pad and y0 + pad < event.y < y1 - pad
+
+                if near_left and near_top:
+                    return "nw"
+                if near_right and near_top:
+                    return "ne"
+                if near_left and near_bottom:
+                    return "sw"
+                if near_right and near_bottom:
+                    return "se"
+                if near_top:
+                    return "n"
+                if near_bottom:
+                    return "s"
+                if near_left:
+                    return "w"
+                if near_right:
+                    return "e"
+                if inside:
+                    return "move"
+                return "new"
+
+            def update_crop_cursor(event=None):
+                if source_stage != "Ordered files":
+                    return
+                if annotation_drawing_mode:
+                    img_label.config(cursor="crosshair")
+                    return
+                if crop_state["drag_mode"] is not None:
+                    mode = crop_state["drag_mode"]
+                elif event is not None:
+                    mode = get_crop_drag_mode(event)
+                else:
+                    mode = None
+
+                cursor_map = {
+                    "move": "fleur",
+                    "n": "sb_v_double_arrow",
+                    "s": "sb_v_double_arrow",
+                    "e": "sb_h_double_arrow",
+                    "w": "sb_h_double_arrow",
+                    "ne": "sizing",
+                    "nw": "sizing",
+                    "se": "sizing",
+                    "sw": "sizing",
+                    "new": "crosshair",
+                }
+                img_label.config(cursor=cursor_map.get(mode, ""))
+
+            def begin_crop_drag(event):
+                if source_stage != "Ordered files" or annotation_drawing_mode:
+                    return False
+
+                crop_state["drag_mode"] = get_crop_drag_mode(event)
+                crop_state["drag_anchor"] = canvas_to_image_point(event)
+                crop_state["drag_start_box"] = get_current_crop_box()
+                crop_state["drag_changed"] = False
+                update_crop_cursor()
+                return True
+
+            def update_crop_drag(event):
+                if source_stage != "Ordered files" or crop_state["drag_mode"] is None or annotation_drawing_mode:
+                    return
+
+                point_x, point_y = canvas_to_image_point(event)
+                anchor_x, anchor_y = crop_state["drag_anchor"]
+                start_x0, start_y0, start_x1, start_y1 = crop_state["drag_start_box"]
+                mode = crop_state["drag_mode"]
+
+                if mode == "move":
+                    width = start_x1 - start_x0
+                    height = start_y1 - start_y0
+                    new_x0 = min(max(0, start_x0 + (point_x - anchor_x)), max(0, columnsNo - width))
+                    new_y0 = min(max(0, start_y0 + (point_y - anchor_y)), max(0, rowsNo - height))
+                    new_box = (new_x0, new_y0, new_x0 + width, new_y0 + height)
+                elif mode == "new":
+                    new_box = (
+                        min(anchor_x, point_x),
+                        min(anchor_y, point_y),
+                        max(anchor_x, point_x),
+                        max(anchor_y, point_y),
+                    )
+                else:
+                    new_x0, new_y0, new_x1, new_y1 = start_x0, start_y0, start_x1, start_y1
+                    if "w" in mode:
+                        new_x0 = point_x
+                    if "e" in mode:
+                        new_x1 = point_x
+                    if "n" in mode:
+                        new_y0 = point_y
+                    if "s" in mode:
+                        new_y1 = point_y
+                    new_box = (
+                        min(new_x0, new_x1),
+                        min(new_y0, new_y1),
+                        max(new_x0, new_x1),
+                        max(new_y0, new_y1),
+                    )
+
+                clamped_box = clamp_crop_box(new_box, columnsNo, rowsNo)
+                if clamped_box != get_current_crop_box():
+                    crop_state["drag_changed"] = True
+                    set_current_crop_box(clamped_box, applied=0)
+
+            def end_crop_drag(event):
+                if source_stage != "Ordered files" or crop_state["drag_mode"] is None:
+                    return
+                if crop_state.get("drag_mode") == "new" and not crop_state.get("drag_changed"):
+                    set_current_crop_box(crop_state["drag_start_box"], applied=crop_state["applied"])
+                crop_state["drag_mode"] = None
+                crop_state["drag_anchor"] = None
+                crop_state["drag_start_box"] = None
+                crop_state["drag_changed"] = False
+                update_crop_cursor(event)
+
             # --- Polygon drawing event handlers ---
             def on_canvas_left_click(event):
                 global annotation_drawing_mode, annotation_current_polygon, annotation_canvas_ids, annotation_scale_x, annotation_scale_y, annotation_current_label
+                if begin_crop_drag(event):
+                    return
                 if not annotation_drawing_mode or is_segmentation_locked():
                     return
                 # Determine draw color from current label's category
@@ -3166,6 +3083,10 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 update_annotation_list()
 
             img_label.bind("<Button-1>", on_canvas_left_click)
+            img_label.bind("<B1-Motion>", update_crop_drag)
+            img_label.bind("<ButtonRelease-1>", end_crop_drag)
+            img_label.bind("<Motion>", update_crop_cursor)
+            img_label.bind("<Leave>", lambda event: img_label.config(cursor="" if not annotation_drawing_mode else "crosshair"))
             img_label.bind("<Button-3>", on_canvas_right_click)
             img_label.bind("<Double-1>", lambda event: show_image_on_dclick())
             '''
@@ -3209,7 +3130,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             filepath_label.configure(state='disabled')
 
             if source_stage == "Ordered files":
-                update_image_with_crop_area(0, crop_x_start, crop_y_start, crop_x_end, crop_y_end, applied_value)
+                update_image_with_crop_area(0, *get_current_crop_box(), crop_state["applied"])
             else:
                 update_image(0)
             
@@ -3442,78 +3363,112 @@ def plot_image(image, source_stage):
     #plt.colorbar()
     plt.show()
 
-def update_image_with_crop_area(frame_index, crop_x_start, crop_y_start, crop_x_end, crop_y_end, applied_value):
-    global img_label, ds, current_frame_index, annotation_scale_x, annotation_scale_y
 
-    current_frame_index = int(frame_index)
+def _draw_crop_overlay_on_canvas(crop_x_start, crop_y_start, crop_x_end, crop_y_end, applied_value):
+    global img_label, annotation_scale_x, annotation_scale_y
 
-    #print(crop_x_start, crop_y_start, crop_x_end, crop_y_end)
-    
-    frame = pixel_array(ds, index=current_frame_index)#Λαβμάνω τη θέση του slider (var) και το εκχωχώ ως frame_index, καλώ το συσκεκριμένο frame
-    #print("frame.dtype: ", frame.dtype)
-    #Μετατροπή του frame σε εικόνα χρησιμοποιώντας το PIL, αν χρειαστεί
-    num_frames = get_nr_frames(ds)
-    '''
-    if num_frames == 1:
-        frame = ds.pixel_array.reshape(1, *ds.pixel_array.shape)
-    '''           
+    img_label.delete("crop_overlay")
+
+    x0 = crop_x_start * annotation_scale_x
+    y0 = crop_y_start * annotation_scale_y
+    x1 = crop_x_end * annotation_scale_x
+    y1 = crop_y_end * annotation_scale_y
+    outline_color = "green" if int(applied_value) == 1 else "red"
+    handle_size = 5
+
+    img_label.create_rectangle(
+        x0,
+        y0,
+        x1,
+        y1,
+        outline=outline_color,
+        width=2,
+        tags="crop_overlay",
+    )
+
+    handle_points = [
+        (x0, y0),
+        ((x0 + x1) / 2, y0),
+        (x1, y0),
+        (x1, (y0 + y1) / 2),
+        (x1, y1),
+        ((x0 + x1) / 2, y1),
+        (x0, y1),
+        (x0, (y0 + y1) / 2),
+    ]
+    for hx, hy in handle_points:
+        img_label.create_rectangle(
+            hx - handle_size,
+            hy - handle_size,
+            hx + handle_size,
+            hy + handle_size,
+            outline=outline_color,
+            fill="white",
+            width=2,
+            tags="crop_overlay",
+        )
+
+
+def _render_frame_on_canvas(frame, crop_box=None, applied_value=0):
+    global img_label, annotation_scale_x, annotation_scale_y
 
     if frame.dtype != np.uint8:
         frame = np.uint8(frame)
-    
-    img = Image.fromarray(frame).convert("RGB")#κάνω convert γιατι αν ειναι MONOCHROME2 δε ξεχωρίζει
+
+    img = Image.fromarray(frame)
     orig_width, orig_height = img.size
 
-    #ελέγχω αν οι τιμές crop area ειναι έγκυρες
-    #print("prin to try: ",applied_value)
-    #print(type(applied_value))
-    try:
-        #σχεδίαση του crop area στην εικόνα
-        draw = ImageDraw.Draw(img)
-        rect_coords = (int(crop_x_start), int(crop_y_start), int(crop_x_end), int(crop_y_end))
-        outline_color = "green" if applied_value==1 else "red"#is_applied or 
-        draw.rectangle(rect_coords, outline=outline_color, width=5)
-        crop_values_apply_btn.config(state="enable")
-    except Exception as e:
-    #except ValueError as e:#παιζει κ αυτό
-        width, height = img.size
-        center_x, center_y = width // 2, height // 2
-        X_size = 50
-        draw.line((center_x - X_size, center_y - X_size, center_x + X_size, center_y + X_size), fill="red", width=5)
-        draw.line((center_x - X_size, center_y + X_size, center_x + X_size, center_y - X_size), fill="red", width=5)
-        crop_values_apply_btn.config(state="disabled")
-        #messagebox.showerror("Crop area error", f"{e}")
     _pfw = preview_frame.winfo_width()
     _pfh = preview_frame.winfo_height()
     max_width  = max(_pfw - 4,  351) if _pfw > 10 else 351
     max_height = max(_pfh - 4,  271) if _pfh > 10 else 271
 
-    # Scale to fit — works both up (enlarge) and down (shrink)
     scale = min(max_width / orig_width, max_height / orig_height)
     new_width  = max(1, int(orig_width  * scale))
     new_height = max(1, int(orig_height * scale))
     image = img.resize((new_width, new_height), Image.LANCZOS)
 
-    # Calculate scale factors for annotation coordinate mapping
     display_width, display_height = image.size
     annotation_scale_x = display_width / orig_width if orig_width > 0 else 1.0
     annotation_scale_y = display_height / orig_height if orig_height > 0 else 1.0
 
-    img_tk = ImageTk.PhotoImage(image)#χρήση της ImageTk.PhotoImage απο την PIL
+    img_tk = ImageTk.PhotoImage(image)
 
-    #ενημέρωση της εικόνας στο Canvas
     img_label.delete("all")
     img_label.config(width=display_width, height=display_height)
     img_label.create_image(0, 0, anchor="nw", image=img_tk, tags="bg_image")
-    img_label.image = img_tk  #αν δε μπεί αυτό χάνετε η εικόνα
+    img_label.image = img_tk
 
-    # Draw saved annotations for this frame
     if annotation_ui_enabled and annotation_current_file:
         draw_annotations_on_canvas(img_label, annotation_current_file, current_frame_index, annotation_scale_x, annotation_scale_y)
 
-    # Refresh per-frame ACEP grading combo
+    if crop_box is not None:
+        try:
+            crop_x_start, crop_y_start, crop_x_end, crop_y_end = (
+                int(crop_box[0]),
+                int(crop_box[1]),
+                int(crop_box[2]),
+                int(crop_box[3]),
+            )
+            if crop_x_end > crop_x_start and crop_y_end > crop_y_start:
+                _draw_crop_overlay_on_canvas(crop_x_start, crop_y_start, crop_x_end, crop_y_end, applied_value)
+                crop_values_apply_btn.config(state="normal")
+            else:
+                crop_values_apply_btn.config(state="disabled")
+        except Exception:
+            crop_values_apply_btn.config(state="disabled")
+
     if _frame_grading_refresh_fn:
         _frame_grading_refresh_fn()
+
+
+def update_image_with_crop_area(frame_index, crop_x_start, crop_y_start, crop_x_end, crop_y_end, applied_value):
+    global img_label, ds, current_frame_index, annotation_scale_x, annotation_scale_y
+
+    current_frame_index = int(frame_index)
+
+    frame = pixel_array(ds, index=current_frame_index)#Λαβμάνω τη θέση του slider (var) και το εκχωχώ ως frame_index, καλώ το συσκεκριμένο frame
+    _render_frame_on_canvas(frame, (crop_x_start, crop_y_start, crop_x_end, crop_y_end), applied_value)
 
 
 #Συνάρτηση για ενημέρωση της εικόνας ανάλογα με το frame
@@ -3523,51 +3478,7 @@ def update_image(frame_index):
     current_frame_index = int(frame_index)
     
     frame = pixel_array(ds, index=current_frame_index)#Λαβμάνω τη θέση του slider (var) και το εκχωχώ ως frame_index, καλώ το συσκεκριμένο frame
-    #print("frame.dtype: ", frame.dtype)
-    #Μετατροπή του frame σε εικόνα χρησιμοποιώντας το PIL, αν χρειαστεί
-    num_frames = get_nr_frames(ds)
-    '''
-    if num_frames == 1:
-        frame = ds.pixel_array.reshape(1, *ds.pixel_array.shape)
-    '''           
-
-    if frame.dtype != np.uint8:
-        frame = np.uint8(frame)
-    
-    img = Image.fromarray(frame)
-    orig_width, orig_height = img.size
-
-    _pfw = preview_frame.winfo_width()
-    _pfh = preview_frame.winfo_height()
-    max_width  = max(_pfw - 4,  351) if _pfw > 10 else 351
-    max_height = max(_pfh - 4,  271) if _pfh > 10 else 271
-
-    # Scale to fit — works both up (enlarge) and down (shrink)
-    scale = min(max_width / orig_width, max_height / orig_height)
-    new_width  = max(1, int(orig_width  * scale))
-    new_height = max(1, int(orig_height * scale))
-    image = img.resize((new_width, new_height), Image.LANCZOS)
-
-    # Calculate scale factors for annotation coordinate mapping
-    display_width, display_height = image.size
-    annotation_scale_x = display_width / orig_width if orig_width > 0 else 1.0
-    annotation_scale_y = display_height / orig_height if orig_height > 0 else 1.0
-    
-    img_tk = ImageTk.PhotoImage(image)#χρήση της ImageTk.PhotoImage απο την PIL
-
-    #ενημέρωση της εικόνας στο Canvas
-    img_label.delete("all")
-    img_label.config(width=display_width, height=display_height)
-    img_label.create_image(0, 0, anchor="nw", image=img_tk, tags="bg_image")
-    img_label.image = img_tk  #αν δε μπεί αυτό χάνετε η εικόνα
-
-    # Draw saved annotations for this frame
-    if annotation_ui_enabled and annotation_current_file:
-        draw_annotations_on_canvas(img_label, annotation_current_file, current_frame_index, annotation_scale_x, annotation_scale_y)
-
-    # Refresh per-frame ACEP grading combo
-    if _frame_grading_refresh_fn:
-        _frame_grading_refresh_fn()
+    _render_frame_on_canvas(frame)
 
 def anonymize_selected_files():
 
@@ -3624,6 +3535,7 @@ def anonymize_selected_files():
         #print("in anonymize_selected_files: ", output_path)
         output_directory = os.path.join(output_path, files_folder)
         os.makedirs(output_directory, exist_ok=True)
+        set_active_package_context(output_directory, package_name=files_folder, cleanup_on_export=True)
 
         fileNo = 0
         #anonymize_popup = popup_message("Anonymize", "Anonymize files...\nPlease wait.")#, delay=3000
@@ -3895,7 +3807,7 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
 def zip_folder():
     #files_folder,το όνομα που θα πάρει τo zipped αρχείο
     #output_directory2, το πλήρες path του φακέλου που θα γίνει zip αρχείο
-    global files_folder,output_directory2 
+    global files_folder,output_directory2, active_package_root, active_package_name, active_package_cleanup_on_export
     save_zip_to = filedialog.askdirectory()
     if not save_zip_to:
         return
@@ -3909,35 +3821,44 @@ def zip_folder():
         #print("Full path: ", output_directory2)
         #print("Save zip to", save_zip_to)
         
-        zipped_file = os.path.join(save_zip_to, files_folder)
+        package_root = active_package_root or output_directory2
+        package_name = active_package_name or files_folder
+        if not package_root or not os.path.isdir(package_root):
+            raise FileNotFoundError("No active package folder is available for ZIP export.")
+        if not package_name:
+            package_name = os.path.basename(package_root.rstrip("\\/")) or "anonymized_export"
+
+        zipped_file = os.path.join(save_zip_to, package_name)
         zipped_file = os.path.normpath(zipped_file)
         #print("Folder to zip: ", folder_to_zip)
 
         selected_annotation_format = config['settings'].get('annotation_format', 'Darwin V7')
-        for filename in os.listdir(output_directory2):
-            ann_file_path = os.path.join(output_directory2, filename)
-            if not ann_file_path.lower().endswith(".dcm"):
-                continue
-            overwrite_managed_sidecars(ann_file_path, create_missing_format=selected_annotation_format)
+        clinician_name, clinician_email = get_clinician_identity()
+        zip_path = export_package_to_zip(
+            package_root,
+            save_zip_to,
+            package_name,
+            global_annotations,
+            annotation_format=selected_annotation_format,
+            patient_id_lookup=get_patient_id_for_metadata,
+            clinician_name=clinician_name,
+            clinician_email=clinician_email,
+        )
 
-        shutil.make_archive(zipped_file, 'zip', output_directory2)
-        
-        console_message(f"created zip file: {zipped_file}.zip", level="debug")
+        console_message(f"created zip file: {zip_path}", level="debug")
 
-        clear_anon_treeview()
-        
-        id_entry_entry.config(state="normal", text="")
-        id_entry_entry.delete(0, "end")
-        anonymize_button["state"] = "normal"
-        
-        #διαγραφή του temp file
-        folder_pattern = files_folder
-        for folder_name in os.listdir(output_path):
-            if re.match(folder_pattern, folder_name):
-                folder_to_del = os.path.join(output_path, folder_name)
-                if os.path.isdir(folder_to_del):
-                    shutil.rmtree(folder_to_del)
-                    
+        if active_package_cleanup_on_export:
+            clear_anon_treeview()
+
+            id_entry_entry.config(state="normal", text="")
+            id_entry_entry.delete(0, "end")
+            anonymize_button["state"] = "normal"
+
+            if os.path.commonpath([os.path.normpath(output_path), os.path.normpath(package_root)]) == os.path.normpath(output_path):
+                if os.path.isdir(package_root):
+                    shutil.rmtree(package_root)
+            clear_active_package_context()
+
         messagebox.showinfo("ZIP Export", "Export to ZIP completed.")
         
         #διαβάζω το σύνολο των αρχείων dicom που είναι στο output path
@@ -3946,7 +3867,7 @@ def zip_folder():
         
 
     except Exception as e:
-        console_message("failed to create zip file", level="error")
+        console_message(f"failed to create zip file: {e}", level="error")
     
 def del_forlders():
     clear_anon_treeview()
@@ -4316,14 +4237,14 @@ anonimyzed_files_treeview.column("DICOM files", width=130)
 anonimyzed_files_treeview.column("Path", width=0, stretch=tk.NO)
 anonimyzed_files_treeview.bind("<Double-1>", OnDoubleClick)
 anonimyzed_files_treeview.grid(row=0, column=0,
-                               rowspan=3,
+                               rowspan=4,
                                padx=5, pady=5, sticky="nsew")
 configure_anonymized_row_style(anonimyzed_files_treeview)
 
 #κατασκευή των scrollbars
 tree3_scrollbar_v = tk.Scrollbar(frame_1_1,
                                    orient="vertical", command=anonimyzed_files_treeview.yview)
-tree3_scrollbar_v.grid(row=0, column=1,rowspan=3, sticky="ns")
+tree3_scrollbar_v.grid(row=0, column=1,rowspan=4, sticky="ns")
 # σύνδεση του scrollbar με το Treeview
 anonimyzed_files_treeview.configure(yscrollcommand=tree3_scrollbar_v.set)
 
@@ -4341,12 +4262,23 @@ button_preview = ttk.Button(frame_1_1, text="Preview",
                             width=8,style='preview.TButton')
 button_preview.grid(row=0, column=2, padx=5, pady=5, sticky="sew")
 
+button_debug_ordered = ttk.Button(
+    frame_1_1,
+    text="-> Ordered\n(Debug)",
+    style="small.TButton",
+    command=add_anonymized_file_to_ordered_debug,
+    width=8,
+)
+button_debug_ordered.grid(row=1, column=2, padx=5, pady=5, sticky="sew")
+if not debug_allow_all_steps():
+    button_debug_ordered.configure(state="disabled")
+
 zip_button = ttk.Button(frame_1_1, text="Export to\nZIP files", style="small.TButton",
                         command=lambda: zip_folder(), width=8)
-zip_button.grid(row=1, column=2, padx=5, pady=5, sticky="sew")
+zip_button.grid(row=2, column=2, padx=5, pady=5, sticky="sew")
 
 button_clear2 = ttk.Button(frame_1_1, text="Clear", command=clear_anon_treeview2, width=10, style='clear.TButton')
-button_clear2.grid(row=2, column=2, padx=5, pady=5, sticky="sew")
+button_clear2.grid(row=3, column=2, padx=5, pady=5, sticky="sew")
 #-----end-------------- frame_1_1 Anonymized Πλαίσιο ---------------------------
 
 #--- start --- Πλαίσιο για το footer ---
