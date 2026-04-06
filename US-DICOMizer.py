@@ -1,4 +1,5 @@
 #import initial libraries
+from enum import auto
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, Menu, font
 from tkinter.messagebox import askyesno
@@ -2892,10 +2893,147 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             )
 
             console_message("Auto-crop manually triggered.", level="info")
+
+        def trigger_auto_crop_2(ds): 
+            try: 
+                sequence_element = ds[0x0018, 0x6011]
+                sequence = sequence_element.value
+                item = sequence[0]
+                
+                crop_x0 = item[0x0018, 0x6018].value
+                crop_y0 = item[0x0018, 0x601a].value
+                crop_x1 = item[0x0018, 0x601c].value
+                crop_y1 = item[0x0018, 0x601e].value
+
+                fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
+                img = pixel_array(ds, index=fr_index)[crop_y0:crop_y1, crop_x0:crop_x1]
+                    
+                if len(img.shape) > 2:
+                    grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+                else:
+                    grayscale = img
+
+                #Get the mode (most common pixel value)
+                counts = np.bincount(grayscale.flatten())
+                background_mode = np.argmax(counts)
+
+                clean_image = grayscale.copy()
+
+                # We use a small range (e.g., mode +/- 2) to catch slight compression noise
+                lower_bound = max(0, background_mode - 2)
+                upper_bound = min(255, background_mode + 2)
+
+                # Set pixels in that gray range to 0 (Black)
+                mask = (clean_image >= lower_bound) & (clean_image <= upper_bound)
+                mask = (mask.astype('uint8')) * 255 # Convert boolean mask to uint8 required by cv2 functions
+
+                kernel = np.ones((5, 5), np.uint8)
+                
+                # Work on the mask
+                mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel, iterations=3)
+                mask = cv.morphologyEx(mask, cv.MORPH_OPEN, kernel, iterations=6)
+                mask = mask.astype(bool)
+                clean_image[mask] = 0
+
+                # Threshold the image
+                _, thresholded = cv.threshold(clean_image, 1, 255, 0)
+
+                # Find contours
+                contours, hierarchy = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+                
+                areas = [cv.contourArea(c) for c in contours]
+                max_index = np.argmax(areas)
+                cnt=contours[max_index]
+                x,y,w,h = cv.boundingRect(cnt)
+                    
+                crop_x0, crop_y0, crop_x1, crop_y1 = [crop_x0+x, crop_y0+y, crop_x0+x+w, crop_y0+y+h]
+
+            except:
+                fr_index = random.randrange(0, num_frames) if num_frames > 1 else 0
+                img = pixel_array(ds, index=fr_index)
+                #crop_x0, crop_y0, crop_x1, crop_y1 = 0, 0, columnsNo, rowsNo
+
+                if len(img.shape) > 2:
+                    grayscale = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+                else:
+                    grayscale = img
+
+                #Get the mode (most common pixel value)
+                counts = np.bincount(grayscale.flatten())
+                background_mode = np.argmax(counts)
+
+                clean_image = grayscale.copy()
+
+                # We use a small range (e.g., mode +/- 2) to catch slight compression noise
+                lower_bound = max(0, background_mode - 2)
+                upper_bound = min(255, background_mode + 2)
+
+                # Set pixels in that gray range to 0 (Black)
+                mask = (clean_image >= lower_bound) & (clean_image <= upper_bound)
+                mask = (mask.astype('uint8')) * 255 # Convert boolean mask to uint8 required by cv2 functions
+
+                kernel = np.ones((5, 5), np.uint8)
+                
+                # Work on the mask
+                mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel, iterations=3)
+                mask = cv.morphologyEx(mask, cv.MORPH_OPEN, kernel, iterations=6)
+                mask = mask.astype(bool)
+                clean_image[mask] = 0    
+
+                _, thresholded = cv.threshold(clean_image, 1, 255, 0)
+                contours, _ = cv.findContours(thresholded, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+
+                if len(contours) == 0:
+                    x, y, w, h = 0, 0, columnsNo, rowsNo
+                else:
+                    areas = [cv.contourArea(c) for c in contours]
+                    sorted_indices = np.argsort(areas)[::-1]
+                    top_contours = [contours[i] for i in sorted_indices[:3]]
+
+                    image_center = np.array([img.shape[1] / 2, img.shape[0] / 2])
+                    min_distance = float('inf')
+                    closest_cnt = None
+
+                    for cnt in top_contours:
+                        M = cv.moments(cnt)
+                        if M["m00"] != 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
+                            center = np.array([cx, cy])
+                            dist = np.linalg.norm(center - image_center)
+                            if dist < min_distance:
+                                min_distance = dist
+                                closest_cnt = cnt
+
+                    if closest_cnt is not None:
+                        x, y, w, h = cv.boundingRect(closest_cnt)
+                    else:
+                        x, y, w, h = 0, 0, columnsNo, rowsNo
+
+            crop_x_start_var.set(crop_x0)
+            crop_y_start_var.set(crop_y0)
+            crop_x_end_var.set(crop_x1)
+            crop_y_end_var.set(crop_y1)
+
+            update_image_with_crop_area(
+                frame_index=current_frame_index,
+                crop_x_start=crop_x0,
+                crop_y_start=crop_y0,
+                crop_x_end=crop_x1,
+                crop_y_end=crop_y1,
+                applied_value=0
+            )
+
+            console_message("Auto-crop manually triggered.", level="info")
+
             
         auto_btn = ttk.Button(crop_info_frame, text="Auto", style="small.TButton", width=6,
                                            command = lambda: trigger_auto_crop(ds))
         auto_btn.grid(row=1, column=5, padx=3, sticky="w")
+
+        auto.btn2 = ttk.Button(crop_info_frame, text="Auto_2", style="small.TButton", width=6,
+                                             command = lambda: trigger_auto_crop_2(ds))
+        auto.btn2.grid(row=1, column=6, padx=3, sticky="w")
         
         #print(crop_identifier_status)
         if crop_identifier_status == 0:
