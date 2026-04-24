@@ -39,7 +39,35 @@ jobs:
 
       - name: Build executable with PyInstaller
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name "US-DICOMizer" --icon=icon.ico --add-data "icon.ico;." --add-data "Logo_Blue_Green_small.png;." --add-data "US-DICOMizer_manual.pdf;." --add-data "VERSION;." --add-data "RELEASE_DATE;." --hidden-import pydicom --hidden-import pydicom.pixels --hidden-import pydicom.pixels.utils --hidden-import pydicom.pixels.encoders --hidden-import pydicom.pixels.encoders.gdcm --hidden-import pydicom.pixels.encoders.pylibjpeg --hidden-import pydicom.encaps --hidden-import pydicom.uid --hidden-import pydicom.dataelem --hidden-import tkhtmlview --hidden-import tkhtmlview.html_parser --hidden-import tkhtmlview.utils US-DICOMizer.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name "US-DICOMizer" --icon=icon.ico --upx-exclude "*.pyd" --upx-exclude "*.dll" --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --add-data "icon.ico;." --add-data "Logo_Blue_Green_small.png;." --add-data "US-DICOMizer_manual.pdf;." --add-data "VERSION;." --add-data "RELEASE_DATE;." --hidden-import pydicom --hidden-import pydicom.pixels --hidden-import pydicom.pixels.utils --hidden-import pydicom.pixels.decoders --hidden-import pydicom.pixels.decoders.gdcm --hidden-import pydicom.pixels.decoders.pillow --hidden-import pydicom.pixels.decoders.pylibjpeg --hidden-import pydicom.pixels.encoders --hidden-import pydicom.pixels.encoders.gdcm --hidden-import pydicom.pixels.encoders.pylibjpeg --hidden-import pydicom.encaps --hidden-import pydicom.uid --hidden-import pydicom.dataelem --hidden-import pylibjpeg --hidden-import pylibjpeg.utils --hidden-import libjpeg --hidden-import tkhtmlview --hidden-import tkhtmlview.html_parser --hidden-import tkhtmlview.utils US-DICOMizer.py
+
+      - name: Verify bundled payload and size
+        shell: pwsh
+        run: |
+          $exe = Get-Item dist/US-DICOMizer.exe
+          $sizeMb = [Math]::Round($exe.Length / 1MB, 2)
+          Write-Host "EXE size: $sizeMb MB"
+
+          pyi-archive_viewer dist/US-DICOMizer.exe -l > archive-list.txt
+
+          $requiredEntryPatterns = @(
+            "_libjpeg\.cp310-win_amd64\.pyd",
+            "pylibjpeg_libjpeg-[^\\]+\.dist-info\\\\entry_points\.txt",
+            "cv2\\\\cv2\.pyd",
+            "numpy\\\\(?:_core|core)\\\\_multiarray_umath\.cp310-win_amd64\.pyd",
+            "matplotlib\\\\_path\.cp310-win_amd64\.pyd",
+            "charset_normalizer\\\\md__mypyc\.cp310-win_amd64\.pyd"
+          )
+
+          foreach ($pattern in $requiredEntryPatterns) {
+            if (-not (Select-String -Path archive-list.txt -Pattern $pattern -Quiet)) {
+              throw "Required bundled dependency missing for pattern: $pattern"
+            }
+          }
+
+          if (Select-String -Path archive-list.txt -Pattern "torch\\|torchvision\\|torchaudio\\" -Quiet) {
+            throw "Unexpected torch-family modules found in bundled payload"
+          }
 
       - name: Package Release
         shell: pwsh

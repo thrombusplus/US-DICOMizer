@@ -1,4 +1,6 @@
 pydicom
+pylibjpeg>=2.0
+pylibjpeg-libjpeg>=2.1
 Pillow
 opencv-python
 numpy
