@@ -99,8 +99,7 @@ $RequiredEntryPatterns = @(
     "pylibjpeg_libjpeg-[^\\]+\.dist-info\\\\entry_points\.txt",
     "cv2\\\\cv2\.pyd",
     "numpy\\\\(?:_core|core)\\\\_multiarray_umath\.cp310-win_amd64\.pyd",
-    "matplotlib\\\\_path\.cp310-win_amd64\.pyd",
-    "charset_normalizer\\\\md__mypyc\.cp310-win_amd64\.pyd"
+    "matplotlib\\\\_path\.cp310-win_amd64\.pyd"
 )
 
 foreach ($Pattern in $RequiredEntryPatterns) {
