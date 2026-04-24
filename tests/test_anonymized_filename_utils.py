@@ -141,7 +141,7 @@ class AnonymizedFilenameUtilsTests(unittest.TestCase):
     def test_tag_value_to_display_label_uses_human_readable_description(self):
         self.assertEqual(
             tag_value_to_display_label("CFVr-R"),
-            "Common Femoral Vein R-shot (Right)",
+            "Common Femoral Vein Random Image(Right)",
         )
 
 

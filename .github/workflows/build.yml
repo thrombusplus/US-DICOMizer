@@ -1,4 +1,4 @@
-name: Build Windows Executable
+name: Build Windows Installer
 permissions:
   contents: write
 
@@ -26,6 +26,9 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
       - name: Write VERSION and RELEASE_DATE files from release tag
         if: github.event_name == 'release'
         run: |
@@ -38,8 +41,46 @@ jobs:
           Write-Host "RELEASE_DATE set to $releaseDate"
 
       - name: Build executable with PyInstaller
+        shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name "US-DICOMizer" --icon=icon.ico --upx-exclude "*.pyd" --upx-exclude "*.dll" --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --add-data "icon.ico;." --add-data "Logo_Blue_Green_small.png;." --add-data "US-DICOMizer_manual.pdf;." --add-data "VERSION;." --add-data "RELEASE_DATE;." --hidden-import pydicom --hidden-import pydicom.pixels --hidden-import pydicom.pixels.utils --hidden-import pydicom.pixels.decoders --hidden-import pydicom.pixels.decoders.gdcm --hidden-import pydicom.pixels.decoders.pillow --hidden-import pydicom.pixels.decoders.pylibjpeg --hidden-import pydicom.pixels.encoders --hidden-import pydicom.pixels.encoders.gdcm --hidden-import pydicom.pixels.encoders.pylibjpeg --hidden-import pydicom.encaps --hidden-import pydicom.uid --hidden-import pydicom.dataelem --hidden-import pylibjpeg --hidden-import pylibjpeg.utils --hidden-import libjpeg --hidden-import tkhtmlview --hidden-import tkhtmlview.html_parser --hidden-import tkhtmlview.utils US-DICOMizer.py
+          $repo = (Get-Location).Path
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --specpath build/pyinstaller-specs `
+            --name "US-DICOMizer" `
+            --icon="$repo\icon.ico" `
+            --upx-exclude "*.pyd" `
+            --upx-exclude "*.dll" `
+            --exclude-module torch `
+            --exclude-module torchvision `
+            --exclude-module torchaudio `
+            --add-data "$repo\icon.ico;." `
+            --add-data "$repo\Logo_Blue_Green_small.png;." `
+            --add-data "$repo\US-DICOMizer_manual.pdf;." `
+            --add-data "$repo\VERSION;." `
+            --add-data "$repo\RELEASE_DATE;." `
+            --hidden-import pydicom `
+            --hidden-import pydicom.pixels `
+            --hidden-import pydicom.pixels.utils `
+            --hidden-import pydicom.pixels.decoders `
+            --hidden-import pydicom.pixels.decoders.gdcm `
+            --hidden-import pydicom.pixels.decoders.pillow `
+            --hidden-import pydicom.pixels.decoders.pylibjpeg `
+            --hidden-import pydicom.pixels.encoders `
+            --hidden-import pydicom.pixels.encoders.gdcm `
+            --hidden-import pydicom.pixels.encoders.pylibjpeg `
+            --hidden-import pydicom.encaps `
+            --hidden-import pydicom.uid `
+            --hidden-import pydicom.dataelem `
+            --hidden-import pylibjpeg `
+            --hidden-import pylibjpeg.utils `
+            --hidden-import libjpeg `
+            --hidden-import tkhtmlview `
+            --hidden-import tkhtmlview.html_parser `
+            --hidden-import tkhtmlview.utils `
+            US-DICOMizer.py
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Verify bundled payload and size
         shell: pwsh
@@ -69,22 +110,42 @@ jobs:
             throw "Unexpected torch-family modules found in bundled payload"
           }
 
-      - name: Package Release
+      - name: Build updater executable with PyInstaller
         shell: pwsh
         run: |
-          $tag = if ("${{ github.event_name }}" -eq "release") { "${{ github.event.release.tag_name }}" } else { "${{ github.ref_name }}" }
-          Compress-Archive -Path dist/US-DICOMizer.exe -DestinationPath "US-DICOMizer-Windows-$tag.zip"
+          $repo = (Get-Location).Path
+          pyinstaller --noconfirm --clean --onefile --windowed --specpath build/pyinstaller-specs --name "US-DICOMizer-Updater" --icon="$repo\icon.ico" us_dicomizer_updater.py
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          if (-not (Test-Path "dist/US-DICOMizer-Updater.exe")) {
+            throw "Updater executable was not produced"
+          }
+
+      - name: Compile setup installer
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Path "VERSION" -Raw).Trim()
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$version" "installer\US-DICOMizer.iss"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $setup = "dist/installer/US-DICOMizer-Setup-v$version.exe"
+          if (-not (Test-Path $setup)) {
+            throw "Setup installer was not produced: $setup"
+          }
 
       - name: Upload to Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          files: US-DICOMizer-Windows-${{ github.event.release.tag_name }}.zip
+          files: dist/installer/US-DICOMizer-Setup-${{ github.event.release.tag_name }}.exe
 
       - name: Upload artifact (manual dispatch)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: US-DICOMizer-Windows
-          path: ./US-DICOMizer-Windows-${{ github.ref_name }}.zip
+          name: US-DICOMizer-Setup
+          path: ./dist/installer/US-DICOMizer-Setup-v*.exe
