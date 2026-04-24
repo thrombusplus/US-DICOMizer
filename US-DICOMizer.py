@@ -10,8 +10,6 @@ import webbrowser
 import shutil
 import subprocess
 from threading import Thread
-import urllib.request
-import urllib.error
 #import threading
 import sys
 import ast
@@ -62,6 +60,19 @@ from settings_io_utils import (
     write_config_atomic,
     write_text_atomic,
 )
+from update_service import (
+    UPDATER_EXE_NAME,
+    build_updater_command,
+    can_apply_installer_update,
+    clear_old_downloads,
+    download_file,
+    fetch_latest_release,
+    get_installed_updater_path,
+    get_installer_download_path,
+    get_updates_dir,
+    is_newer_version,
+    select_setup_asset,
+)
 
 
 def resource_path(relative_path):
@@ -90,54 +101,188 @@ def _read_release_date():
         return "Unknown"
 
 
-GITHUB_RELEASES_API = "https://api.github.com/repos/thrombusplus/US-DICOMizer/releases/latest"
-
-
-def _parse_version(v):
-    """Parse a version string like '4.16' into a tuple of ints for comparison."""
+def _log_update_message(message, level="info"):
     try:
-        return tuple(int(x) for x in v.split("."))
-    except (ValueError, AttributeError):
-        return (0,)
+        console_message(message, level=level)
+    except Exception:
+        try:
+            logger.log(getattr(logging, level.upper(), logging.INFO), message)
+        except Exception:
+            pass
 
 
-def _show_update_dialog(latest_tag, release_url):
-    """Show a dialog (on the main thread) informing the user of a new release."""
+def _can_apply_installer_update():
+    updater_path = get_installed_updater_path(sys.executable)
+    return can_apply_installer_update(
+        is_frozen=bool(getattr(sys, "frozen", False)),
+        app_executable_path=sys.executable,
+        updater_path=updater_path,
+    )
+
+
+def _show_no_update_dialog():
+    messagebox.showinfo("Check for updates", f"US-DICOMizer {version} is up to date.")
+
+
+def _show_update_error(message):
+    messagebox.showerror("Check for updates", message)
+
+
+def _open_release_page(release_url):
+    webbrowser.open(release_url)
+
+
+def _show_manual_update_dialog(latest_tag, release_url):
     if messagebox.askyesno(
         "Update Available",
-        f"A new version ({latest_tag}) is available.\n\nWould you like to open the download page?",
+        (
+            f"A new version ({latest_tag}) is available.\n\n"
+            "Automatic install is available only from the installed app. "
+            "Would you like to open the download page?"
+        ),
     ):
-        webbrowser.open(release_url)
+        _open_release_page(release_url)
 
 
-def check_for_updates():
-    """Background thread: compare latest GitHub release tag against the running version."""
+def _prompt_update_install(release, asset):
+    latest_tag = release.get("tag_name", "")
+    release_url = release.get("html_url", "")
+    if not _can_apply_installer_update():
+        _show_manual_update_dialog(latest_tag, release_url)
+        return
+
+    if messagebox.askyesno(
+        "Update Available",
+        (
+            f"A new version ({latest_tag}) is available.\n\n"
+            "Download and install it now? US-DICOMizer will close and restart "
+            "after setup finishes."
+        ),
+    ):
+        _download_and_install_update(release, asset)
+
+
+def _download_and_install_update(release, asset):
+    latest_tag = release.get("tag_name", "")
+    dialog = tk.Toplevel(root)
+    dialog.title("Downloading update")
+    dialog.geometry("420x130")
+    dialog.resizable(False, False)
+    dialog.transient(root)
+
+    status_var = tk.StringVar(value=f"Downloading {latest_tag} setup...")
+    status_label = ttk.Label(dialog, textvariable=status_var, wraplength=380)
+    status_label.pack(fill="x", padx=16, pady=(16, 8))
+
+    progress_var = tk.DoubleVar(value=0)
+    progress_bar = ttk.Progressbar(dialog, mode="indeterminate", variable=progress_var, maximum=100)
+    progress_bar.pack(fill="x", padx=16, pady=(0, 12))
+    progress_bar.start(10)
+
+    def update_progress(downloaded, total):
+        def apply_progress():
+            if not dialog.winfo_exists():
+                return
+            if total:
+                progress_bar.stop()
+                progress_bar.configure(mode="determinate")
+                percent = min(100, int((downloaded / total) * 100))
+                progress_var.set(percent)
+                status_var.set(f"Downloading {latest_tag} setup... {percent}%")
+            else:
+                status_var.set(f"Downloading {latest_tag} setup... {downloaded // 1024} KB")
+
+        root.after(0, apply_progress)
+
+    def finish(installer_path):
+        if dialog.winfo_exists():
+            progress_bar.stop()
+            status_var.set("Starting installer...")
+            dialog.update_idletasks()
+        _launch_update_installer(installer_path, dialog)
+
+    def fail(exc):
+        if dialog.winfo_exists():
+            progress_bar.stop()
+            dialog.destroy()
+        messagebox.showerror("Update failed", f"Failed to download the update:\n{exc}")
+        release_url = release.get("html_url", "")
+        if release_url and messagebox.askyesno(
+            "Open download page?",
+            "Would you like to open the release page instead?",
+        ):
+            _open_release_page(release_url)
+
+    def worker():
+        try:
+            installer_path = get_installer_download_path(app_directory, asset["name"])
+            clear_old_downloads(get_updates_dir(app_directory), installer_path)
+            download_file(asset["browser_download_url"], installer_path, progress_callback=update_progress)
+            root.after(0, lambda: finish(installer_path))
+        except Exception as exc:
+            root.after(0, lambda error=exc: fail(error))
+
+    Thread(target=worker, daemon=True).start()
+
+
+def _launch_update_installer(installer_path, dialog=None):
+    updates_dir = get_updates_dir(app_directory)
+    source_updater_path = get_installed_updater_path(sys.executable)
+    runtime_updater_path = os.path.join(updates_dir, UPDATER_EXE_NAME)
+    log_path = os.path.join(updates_dir, "update.log")
+
     try:
-        req = urllib.request.Request(
-            GITHUB_RELEASES_API,
-            headers={"User-Agent": "US-DICOMizer"},
+        os.makedirs(updates_dir, exist_ok=True)
+        shutil.copy2(source_updater_path, runtime_updater_path)
+        command = build_updater_command(
+            updater_path=runtime_updater_path,
+            installer_path=installer_path,
+            app_executable_path=sys.executable,
+            app_pid=os.getpid(),
+            log_path=log_path,
         )
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode())
+        subprocess.Popen(command, close_fds=True)
+    except Exception as exc:
+        if dialog is not None and dialog.winfo_exists():
+            dialog.destroy()
+        messagebox.showerror("Update failed", f"Failed to start the updater:\n{exc}")
+        return
 
-        latest_tag = data.get("tag_name", "")          # e.g. "v4.17"
-        release_url = data.get("html_url", GITHUB_RELEASES_API)
+    if dialog is not None and dialog.winfo_exists():
+        dialog.destroy()
+    root.after(200, lambda: (root.quit(), root.destroy()))
 
-        if not latest_tag:
+
+def check_for_updates(manual=False):
+    """Background thread: compare latest GitHub setup release against the running version."""
+    try:
+        release = fetch_latest_release()
+        latest_tag = release.get("tag_name", "")
+        if not latest_tag or not is_newer_version(version, latest_tag):
+            if manual:
+                root.after(0, _show_no_update_dialog)
             return
 
-        latest_clean = latest_tag.lstrip("v")
-        current_tuple = _parse_version(version)
-        latest_tuple  = _parse_version(latest_clean)
+        asset = select_setup_asset(release)
+        if not asset:
+            if manual:
+                root.after(
+                    0,
+                    lambda: _show_update_error(
+                        f"A newer release ({latest_tag}) exists, but it does not include a setup installer."
+                    ),
+                )
+            return
 
-        if latest_tuple > current_tuple:
-            # Schedule the dialog on the main tkinter thread
-            tag = latest_tag
-            url = release_url
-            root.after(0, lambda: _show_update_dialog(tag, url))
-    except Exception:
-        # Network/parse errors are silently ignored
-        pass
+        root.after(0, lambda: _prompt_update_install(release, asset))
+    except Exception as exc:
+        _log_update_message(f"Update check failed: {exc}", level="debug")
+        if manual:
+            root.after(0, lambda error=exc: _show_update_error(f"Failed to check for updates:\n{error}"))
+
+
+def start_update_check(manual=False):
+    Thread(target=lambda: check_for_updates(manual=manual), daemon=True).start()
 
 import re
 import logging
@@ -4011,6 +4156,7 @@ def menubar():
     root_menu.add_cascade(label="Menu", menu=main_menu)
     main_menu.add_command(label="Settings", command=settings)
     main_menu.add_command(label="App manual", command=open_manual)
+    main_menu.add_command(label="Check for updates", command=lambda: start_update_check(manual=True))
     main_menu.add_command(label="About", command=about)
     main_menu.add_separator()
     main_menu.add_command(label="Exit", command=root.quit)
@@ -4333,5 +4479,5 @@ root.bind("<Prior>",lambda event: move_up())
 root.bind("<Next>",lambda event: move_down())
 
 logger.info('loaded all functions successfully')
-Thread(target=check_for_updates, daemon=True).start()
+start_update_check(manual=False)
 root.mainloop()
