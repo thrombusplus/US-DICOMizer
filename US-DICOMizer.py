@@ -27,6 +27,7 @@ from anonymized_filename_utils import (
     build_tag_display_lookup,
     compressibility_label_to_value,
     compressibility_value_to_label,
+    group_tag_values_by_leg,
     looks_anonymized_filename,
     parse_anonymized_filename as parse_anonymized_filename_impl,
     tag_value_to_display_label,
@@ -1878,17 +1879,26 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     annotation_notebook.grid(row=0, column=0, padx=0, pady=0, sticky="nsew")
 
     annotations_tab_frame = None
+    crop_tags_tab_frame = None
 
     if annotations_enabled:
         annotations_tab_frame = tk.Frame(annotation_notebook)
         annotations_tab_frame.grid_columnconfigure(0, weight=1)
         annotation_notebook.add(annotations_tab_frame, text="Annotations")
 
+    if source_stage == "Ordered files":
+        crop_tags_tab_frame = tk.Frame(annotation_notebook)
+        crop_tags_tab_frame.grid_columnconfigure(0, weight=1)
+        crop_tags_tab_frame.grid_rowconfigure(1, weight=1)
+        annotation_notebook.add(crop_tags_tab_frame, text="Tags")
+
     # Attributes tab
     tags_tree_frame = tk.Frame(annotation_notebook)
     tags_tree_frame.grid_columnconfigure(0, weight=1)
     tags_tree_frame.grid_rowconfigure(0, weight=1)
     annotation_notebook.add(tags_tree_frame, text="Attributes")
+    if crop_tags_tab_frame is not None:
+        annotation_notebook.select(crop_tags_tab_frame)
 
     filepath_label = None
     frame_grading_var = None
@@ -1899,6 +1909,17 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     protocol_deviation_notes_text = None
     protocol_deviation_notes_label = None
     _class_buttons = {}
+
+    def update_ordered_file_tag(raw_tag):
+        if source_stage != "Ordered files" or not treeview.exists(selected_item):
+            return
+        current_values = treeview.item(selected_item, "values")
+        if len(current_values) < 3:
+            return
+
+        updated_values = list(current_values)
+        updated_values[2] = raw_tag
+        treeview.item(selected_item, values=tuple(updated_values))
 
     def current_file_path():
         if annotation_current_file_ref is not None:
@@ -1920,6 +1941,59 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
     def refresh_frame_grading_ui():
         return
+
+    if crop_tags_tab_frame is not None:
+        web_link_str = config.get("tags_link", "tags_link", fallback="")
+        crop_tags_header = tk.Frame(crop_tags_tab_frame)
+        crop_tags_header.grid(row=0, column=0, padx=5, pady=(5, 0), sticky="ew")
+
+        select_tag_label = tk.Label(
+            crop_tags_header,
+            text="Select tag:",
+            font=("Segoe UI", 8, "underline"),
+            fg="blue",
+            cursor="hand2",
+        )
+        select_tag_label.grid(row=0, column=0, padx=0, pady=0, sticky="w")
+        select_tag_label.bind("<Button-1>", lambda e: open_web_link(web_link_str))
+
+        crop_tag_notebook = ttk.Notebook(crop_tags_tab_frame)
+        crop_tag_notebook.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
+
+        crop_tag_var = tk.StringVar(value=tag_value if tag_value != "none" else "")
+
+        def on_crop_tag_selected():
+            raw_tag = crop_tag_var.get()
+            if raw_tag:
+                update_ordered_file_tag(raw_tag)
+
+        try:
+            grouped_tag_values = group_tag_values_by_leg(get_runtime_tag_values(include_none=True))
+            for leg_name in ("Left Leg", "Right Leg"):
+                leg_frame = tk.Frame(crop_tag_notebook)
+                leg_frame.grid_columnconfigure(0, weight=1)
+                crop_tag_notebook.add(leg_frame, text=leg_name)
+
+                leg_tag_values = grouped_tag_values.get(leg_name, ())
+                if leg_tag_values:
+                    for row_index, raw_tag in enumerate(leg_tag_values):
+                        ttk.Radiobutton(
+                            leg_frame,
+                            text=tag_value_to_display_label(raw_tag),
+                            variable=crop_tag_var,
+                            value=raw_tag,
+                            command=on_crop_tag_selected,
+                        ).grid(row=row_index, column=0, padx=8, pady=2, sticky="w")
+                else:
+                    tk.Label(leg_frame, text="No tags configured", font=("Segoe UI", 8)).grid(
+                        row=0, column=0, padx=8, pady=5, sticky="w"
+                    )
+
+            if crop_tag_var.get().endswith("-R"):
+                crop_tag_notebook.select(crop_tag_notebook.tabs()[1])
+        except Exception as e:
+            console_message("error while reading tag values from settings.ini", level="error")
+            messagebox.showerror("Read tag_values", f"{e}.")
 
     if annotations_enabled:
         # --- Annotation tab content ---
@@ -2543,47 +2617,9 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
     info_frame = tk.Frame(frame_2)
     info_frame.grid(padx=0, pady=5, row=1, column=0, sticky="nsew")
-    info_frame.grid_columnconfigure(1, weight=1)
+    info_frame.grid_columnconfigure(0, weight=1)
 
-    # ------- Δημιουργία του Combobox για το Tag -------
     if source_stage == "Ordered files":
-
-        sel_tag_frame = tk.Frame(info_frame)
-        sel_tag_frame.grid(padx=0, pady=0, row=1, column=1, sticky="nsew")
-
-        #ρύθμιση του πλέγματος για το sel_tag_frame
-        sel_tag_frame.grid_rowconfigure(0, weight=1)
-        sel_tag_frame.grid_rowconfigure(1, weight=1)
-        sel_tag_frame.grid_columnconfigure(0, weight=1)
-
-        web_link_str = config.get("tags_link", "tags_link", fallback="")
-
-        select_tag_label = tk.Label(sel_tag_frame,
-                                    text="Select tag:", font=("Segoe UI", 8, "underline"),
-                                    fg="blue", cursor="hand2")
-        select_tag_label.grid(row=0, column=0, padx=5, pady=0)
-        select_tag_label.bind("<Button-1>", lambda e: open_web_link(web_link_str))
-
-        tag_combobox = None
-        try:
-            #διαβάζω τις τιμές απο το settings.ini και τις μετατρέπω σε λίστα
-            tag_display_lookup = get_runtime_tag_display_lookup(include_none=True)
-            #print(type(tag_values))
-            #print(len(tag_values))
-            
-            tag_combobox = ttk.Combobox(sel_tag_frame, width=44, state="readonly")
-            tag_combobox['values'] = list(tag_display_lookup.keys())
-            tag_combobox.grid(row=1, column=0, padx=5, pady=0)
-            tag_combobox.set(tag_value_to_display_label(tag_value))
-        except Exception as e:
-            console_message("error while reading tag values from settings.ini", level="error")
-            messagebox.showerror("Read tag_values", f"{e}.")
-
-        #print(len(tag_combobox['values']))
-        #tags_len = len(tag_combobox['values'])
-        #print(tags_len)     
-
-        #print(web_link_str)
         #ελέγχω αν το dicom αρχείο  ειναι single ή multi frame
         if num_frames > 1:
             #frames = ds.pixel_array
@@ -2953,30 +2989,6 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         else:
             crop_values_add_btn["state"] = "disabled"
                                            
-        #συνάρτηση για ενημέρωση του tag στο Treeview
-        def update_tag(event,  treeview, selected_item):
-            if tag_combobox is None:
-                return
-            new_tag = get_tag_value_from_display(tag_combobox.get(), include_none=True)
-            current_values = treeview.item(selected_item, "values")
-            #print(current_values)
-            #print(type(current_values))#tuple, δε μπορει να επεξεργαστεί
-
-            updated_values = list(current_values)#για να το επεξεργαστώ
-            updated_values[2] = new_tag
-            treeview.item(selected_item, values=tuple(updated_values))
-            '''
-            if new_tag != "none":
-                treeview.tag_configure("highlight", background="#f9f871")
-                treeview.item(selected_item, tags=("highlight",))
-            else:
-                treeview.item(selected_item, tags=())
-            '''
-
-        #Σύνδεση του Combobox με την αλλαγή
-        if tag_combobox is not None:
-            tag_combobox.bind("<<ComboboxSelected>>", lambda event: update_tag(event, treeview, selected_item))
-            
     #έλεγχος αν το αρχείο DICOM περιέχει δεδομένα εικόνας
     if 'PixelData' in ds:
         try:

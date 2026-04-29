@@ -23,8 +23,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -44,7 +44,7 @@ jobs:
         shell: pwsh
         run: |
           $repo = (Get-Location).Path
-          pyinstaller --noconfirm --clean --onefile --windowed `
+          python -m PyInstaller --noconfirm --clean --onefile --windowed `
             --specpath build/pyinstaller-specs `
             --name "US-DICOMizer" `
             --icon="$repo\icon.ico" `
@@ -89,7 +89,7 @@ jobs:
           $sizeMb = [Math]::Round($exe.Length / 1MB, 2)
           Write-Host "EXE size: $sizeMb MB"
 
-          pyi-archive_viewer dist/US-DICOMizer.exe -l > archive-list.txt
+          python -m PyInstaller.utils.cliutils.archive_viewer dist/US-DICOMizer.exe -l > archive-list.txt
 
           $requiredEntryPatterns = @(
             "_libjpeg\.cp310-win_amd64\.pyd",
@@ -113,7 +113,7 @@ jobs:
         shell: pwsh
         run: |
           $repo = (Get-Location).Path
-          pyinstaller --noconfirm --clean --onefile --windowed --specpath build/pyinstaller-specs --name "US-DICOMizer-Updater" --icon="$repo\icon.ico" us_dicomizer_updater.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --specpath build/pyinstaller-specs --name "US-DICOMizer-Updater" --icon="$repo\icon.ico" us_dicomizer_updater.py
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }

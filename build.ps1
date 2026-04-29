@@ -30,10 +30,23 @@ function Find-InnoSetupCompiler {
     throw "Inno Setup compiler (ISCC.exe) was not found. Install Inno Setup 6 and rerun build.ps1."
 }
 
+$VenvPython = Join-Path $ScriptDir ".venv\Scripts\python.exe"
+if (Test-Path $VenvPython) {
+    $Python = $VenvPython
+} else {
+    $Python = "python"
+}
+
+& $Python -c "import sys; raise SystemExit(1 if sys.version_info < (3, 10) else 0)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Python 3.10 or newer is required to build US-DICOMizer." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
 Write-Host "==> Installing / updating dependencies..." -ForegroundColor Cyan
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip install pyinstaller
+& $Python -m pip install --upgrade pip
+& $Python -m pip install -r requirements.txt
+& $Python -m pip install pyinstaller
 
 Write-Host "==> Building executable with PyInstaller..." -ForegroundColor Cyan
 Stop-Process -Name "US-DICOMizer" -ErrorAction SilentlyContinue
@@ -45,7 +58,7 @@ $ManualPath = Join-Path $ScriptDir "US-DICOMizer_manual.pdf"
 $VersionPath = Join-Path $ScriptDir "VERSION"
 $ReleaseDatePath = Join-Path $ScriptDir "RELEASE_DATE"
 
-pyinstaller --noconfirm --onefile --windowed `
+& $Python -m PyInstaller --noconfirm --onefile --windowed `
     --clean `
     --specpath "build\pyinstaller-specs" `
     --name "US-DICOMizer" `
@@ -92,7 +105,7 @@ $ExeSizeMb = [Math]::Round($Exe.Length / 1MB, 2)
 Write-Host "EXE size: $ExeSizeMb MB"
 
 $ArchiveList = Join-Path $ScriptDir "build\archive-list.txt"
-pyi-archive_viewer "dist\US-DICOMizer.exe" -l | Out-File -Encoding utf8 $ArchiveList
+& $Python -m PyInstaller.utils.cliutils.archive_viewer "dist\US-DICOMizer.exe" -l | Out-File -Encoding utf8 $ArchiveList
 
 $RequiredEntryPatterns = @(
     "_libjpeg\.cp310-win_amd64\.pyd",
@@ -115,7 +128,7 @@ if (Select-String -Path $ArchiveList -Pattern "torch\\|torchvision\\|torchaudio\
 }
 
 Write-Host "==> Building updater executable with PyInstaller..." -ForegroundColor Cyan
-pyinstaller --noconfirm --onefile --windowed `
+& $Python -m PyInstaller --noconfirm --onefile --windowed `
     --clean `
     --specpath "build\pyinstaller-specs" `
     --name "US-DICOMizer-Updater" `
