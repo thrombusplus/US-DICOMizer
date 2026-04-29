@@ -1,6 +1,7 @@
 #define MyAppName "US-DICOMizer"
 #define MyAppPublisher "ThrombUS+"
 #define MyAppURL "https://github.com/thrombusplus/US-DICOMizer"
+#define MyAppDescription "US-DICOMizer is an advanced application designed for anonymizing ultrasound diagnostic DICOM images. This tool ensures compliance with data privacy regulations by securely removing patient-identifiable information from DICOM files, making them suitable for research, sharing, and analysis."
 #ifndef AppVersion
 #define AppVersion "0.0"
 #endif
@@ -10,19 +11,23 @@
 
 [Setup]
 AppId={{8D78B5B4-5B80-4D4F-9A54-3C13728EAFB0}
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 AppName={#MyAppName}
 AppVersion={#AppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}/releases
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+AppComments={#MyAppDescription}
+DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
-DisableDirPage=yes
+DisableDirPage=no
+DisableFinishedPage=no
 DisableProgramGroupPage=yes
 UsePreviousAppDir=no
 UninstallDisplayIcon={app}\US-DICOMizer.exe
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 OutputDir=..\dist\installer
 OutputBaseFilename=US-DICOMizer-Setup-v{#AppVersion}
 SetupIconFile=..\icon.ico
@@ -42,3 +47,8 @@ Source: "..\RELEASE_DATE"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\US-DICOMizer.exe"; WorkingDir: "{app}"
 
+[Run]
+Filename: "{app}\US-DICOMizer.exe"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+
+[Messages]
+WelcomeLabel2={#MyAppDescription}
