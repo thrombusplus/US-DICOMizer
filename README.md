@@ -13,7 +13,7 @@ These functionalities aim to address the unique requirements of ultrasound imagi
 ## Installation and updates
 
 Windows releases are distributed as a single setup executable named `US-DICOMizer-Setup-vX.Y.exe`.
-The installer installs US-DICOMizer per user under `%LOCALAPPDATA%\Programs\US-DICOMizer`, adds a Start Menu shortcut, and keeps settings/output data in `%USERPROFILE%\.anonymizer`.
+The installer installs US-DICOMizer for all users under `%ProgramFiles%\US-DICOMizer` by default, lets you choose a different installation folder, adds a Start Menu shortcut, and keeps settings/output data in `%USERPROFILE%\.anonymizer`.
 
 Installed builds check public GitHub releases for updates on startup and through **Menu -> Check for updates**. When a newer setup release is available, the app downloads that one setup file, closes, runs the bundled updater, installs the update silently, and relaunches.
 
