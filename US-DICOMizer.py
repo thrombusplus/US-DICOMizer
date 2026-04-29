@@ -40,6 +40,7 @@ from annotation_metadata_utils import (
     import_darwin_annotation,
     import_labelme_annotation,
 )
+from dicom_pixel_utils import apply_jpeg_baseline_pixel_metadata
 from package_io_utils import (
     find_existing_sidecar_paths,
     get_preferred_sidecar_paths,
@@ -1856,6 +1857,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
     _frame_grading_refresh_fn = None
     current_frame_index = 0
     ds = pydicom.dcmread(file_path) #ανάγνωση του αρχείου DICOM
+    apply_jpeg_baseline_pixel_metadata(ds)
     num_frames = get_nr_frames(ds)
 
     if 'PixelData' in ds:#αν το dicom έχει εικόνα διαβάζω τις διαστάσεις απο τα tags που υπάρχουν
@@ -3739,6 +3741,7 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
     try:
         dicom_file = file_path
         ds = pydicom.dcmread(dicom_file)
+        apply_jpeg_baseline_pixel_metadata(ds)
         num_frames = get_nr_frames(ds)
         #print(ds.file_meta.TransferSyntaxUID, ds.file_meta.TransferSyntaxUID.name)
         
@@ -3807,8 +3810,6 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
             #ορισμός του YBR_FULL_422 ανεξαρτήτως αρχικής τιμής YBR_FULL_422 ή RGB καθώς ειναι
             #το default Photometric Interpretation τou JPEG
             
-            photometric_interpretation = "MONOCHROME2" if ds.PhotometricInterpretation == "MONOCHROME2" else "YBR_FULL_422"
-            
             #εφαρμογή JPEG συμπίεσης
             jpeg_data_list = []
             for cropped_frame in cropped_frames:
@@ -3823,7 +3824,7 @@ def anonymize_file(file_path, tag_value, fileNo, output_directory, files_folder,
             
             #εφαρμογή σωστών τιμών στα tags
             ds.file_meta.TransferSyntaxUID = UID("1.2.840.10008.1.2.4.50") #εφαρμογή του Transfer Syntax UID  JPEG Baseline 1
-            ds.PhotometricInterpretation = photometric_interpretation
+            apply_jpeg_baseline_pixel_metadata(ds)
             ds[0x0028, 0x2110] = DataElement(0x00282110, 'CS', "01")           #Lossy Image Compression 0 όχι / 1 ναί
             ds[0x0028, 0x2114] = DataElement(0x00282114, 'LO', "ISO_10918_1")  #Lossy Image Compression Method
             #ds[0x0028, 0x2112] = DataElement(0x00282112, 'DS', "5")            #για συμπίεση 85
