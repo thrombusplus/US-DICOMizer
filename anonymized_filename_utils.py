@@ -43,28 +43,28 @@ COMPRESSIBILITY_LABEL_BY_VALUE = {
 
 DEFAULT_TAG_LABEL_BY_VALUE = {
     "none": "None",
-    "CFVr-L": "Common Femoral Vein Random Image(Left)",
-    "CFV-L": "Common Femoral Vein (Left)",
-    "CFVr-R": "Common Femoral Vein Random Image(Right)",
-    "CFV-R": "Common Femoral Vein (Right)",
-    "GSVr-L": "Great Saphenous Vein Random Image(Left)",
-    "GSV-L": "Great Saphenous Vein (Left)",
-    "GSVr-R": "Great Saphenous Vein Random Image(Right)",
-    "GSV-R": "Great Saphenous Vein (Right)",
-    "FVr-L": "Femoral Vein Random Image(Left)",
-    "FV-L": "Femoral Vein (Left)",
-    "FVr-R": "Femoral Vein Random Image(Right)",
-    "FV-R": "Femoral Vein (Right)",
-    "FV-Dr-L": "Femoral Vein Doppler Random Image(Left)",
-    "FV-D-L": "Femoral Vein Doppler (Left)",
-    "FV-Dr-R": "Femoral Vein Doppler Random Image(Right)",
-    "FV-D-R": "Femoral Vein Doppler (Right)",
-    "PVr-L": "Popliteal Vein Random Image(Left)",
-    "PV-L": "Popliteal Vein (Left)",
-    "PVr-R": "Popliteal Vein Random Image(Right)",
-    "PV-R": "Popliteal Vein (Right)",
-    "OPT-L": "Optional View (Left)",
-    "OPT-R": "Optional View (Right)",
+    "CFVr-L": "Common Femoral Vein Random Image",
+    "CFV-L": "Common Femoral Vein",
+    "CFVr-R": "Common Femoral Vein Random Image",
+    "CFV-R": "Common Femoral Vein",
+    "GSVr-L": "Great Saphenous Vein Random Image",
+    "GSV-L": "Great Saphenous Vein",
+    "GSVr-R": "Great Saphenous Vein Random Image",
+    "GSV-R": "Great Saphenous Vein",
+    "FVr-L": "Femoral Vein Random Image",
+    "FV-L": "Femoral Vein",
+    "FVr-R": "Femoral Vein Random Image",
+    "FV-R": "Femoral Vein",
+    "FV-Dr-L": "Femoral Vein Doppler Random Image",
+    "FV-D-L": "Femoral Vein Doppler",
+    "FV-Dr-R": "Femoral Vein Doppler Random Image",
+    "FV-D-R": "Femoral Vein Doppler",
+    "PVr-L": "Popliteal Vein Random Image",
+    "PV-L": "Popliteal Vein",
+    "PVr-R": "Popliteal Vein Random Image",
+    "PV-R": "Popliteal Vein",
+    "OPT-L": "Optional View",
+    "OPT-R": "Optional View ",
 }
 
 DVT_CODE_TO_VALUE = dict(THROMBOSIS_CODE_TO_VALUE)
@@ -234,6 +234,27 @@ def build_tag_display_lookup(tag_values):
             label = f"{label} [{raw_value}]"
         lookup[label] = raw_value
     return lookup
+
+
+def group_tag_values_by_leg(tag_values):
+    grouped = {
+        "Left Leg": [],
+        "Right Leg": [],
+    }
+    for raw_value in tag_values or ():
+        if not raw_value:
+            continue
+        raw_value = str(raw_value)
+        if raw_value.strip().lower() == "none":
+            continue
+        if raw_value.endswith("-R"):
+            grouped["Right Leg"].append(raw_value)
+        else:
+            grouped["Left Leg"].append(raw_value)
+    return {
+        "Left Leg": tuple(grouped["Left Leg"]),
+        "Right Leg": tuple(grouped["Right Leg"]),
+    }
 
 
 def format_file_no(file_no):

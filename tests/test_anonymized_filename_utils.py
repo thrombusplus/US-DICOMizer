@@ -4,6 +4,7 @@ from anonymized_filename_utils import (
     build_anonymized_filename,
     compressibility_label_to_value,
     compressibility_value_to_label,
+    group_tag_values_by_leg,
     parse_anonymized_filename,
     tag_value_to_display_label,
     thrombosis_label_to_value,
@@ -141,8 +142,16 @@ class AnonymizedFilenameUtilsTests(unittest.TestCase):
     def test_tag_value_to_display_label_uses_human_readable_description(self):
         self.assertEqual(
             tag_value_to_display_label("CFVr-R"),
-            "Common Femoral Vein Random Image(Right)",
+            "Common Femoral Vein Random Image",
         )
+
+    def test_group_tag_values_by_leg_excludes_none_and_preserves_order(self):
+        grouped = group_tag_values_by_leg(
+            ["none", "CFVr-L", "CFV-L", "CFVr-R", "CFV-R", "CUSTOM", "OPT-R"]
+        )
+
+        self.assertEqual(grouped["Left Leg"], ("CFVr-L", "CFV-L", "CUSTOM"))
+        self.assertEqual(grouped["Right Leg"], ("CFVr-R", "CFV-R", "OPT-R"))
 
 
 if __name__ == "__main__":
