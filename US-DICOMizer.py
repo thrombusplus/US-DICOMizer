@@ -22,14 +22,17 @@ from autocrop_utils import (
 )
 from anonymized_filename_utils import (
     build_anonymized_filename as build_anonymized_filename_impl,
+    build_side_neutral_tag_display_lookup,
     COMPRESSIBILITY_LABEL_BY_VALUE,
     THROMBOSIS_LABEL_BY_VALUE,
     build_tag_display_lookup,
+    compose_tag_value_with_leg,
     compressibility_label_to_value,
     compressibility_value_to_label,
     group_tag_values_by_leg,
     looks_anonymized_filename,
     parse_anonymized_filename as parse_anonymized_filename_impl,
+    split_tag_value_and_leg,
     tag_value_to_display_label,
     thrombosis_label_to_value,
     thrombosis_value_to_label,
@@ -665,6 +668,10 @@ def get_runtime_tag_values(include_none=False):
 
 def get_runtime_tag_display_lookup(include_none=False):
     return build_tag_display_lookup(get_runtime_tag_values(include_none=include_none))
+
+
+def get_runtime_side_neutral_tag_display_lookup():
+    return build_side_neutral_tag_display_lookup(get_runtime_tag_values(include_none=True))
 
 
 def get_tag_value_from_display(display_value, include_none=False):
@@ -1902,6 +1909,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
     filepath_label = None
     frame_grading_var = None
+    leg_var = None
     thrombosis_var = None
     compressibility_var = None
     review_var = None
@@ -2005,22 +2013,59 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
         class_frame.grid_columnconfigure(1, weight=1)
         class_frame.grid_columnconfigure(3, weight=1)
 
-        tag_display_lookup = get_runtime_tag_display_lookup(include_none=True)
-        tag_editor_var = tk.StringVar(
-            value=tag_value_to_display_label(get_default_tag_for_file(current_file_path()))
-        )
+        side_neutral_tag_display_lookup = get_runtime_side_neutral_tag_display_lookup()
 
-        tk.Label(class_frame, text="Tag:", font=("Segoe UI", 8)).grid(row=0, column=0, padx=5, pady=2, sticky="w")
+        def annotation_tag_selection_from_raw(raw_tag):
+            base_tag, leg_name = split_tag_value_and_leg(raw_tag)
+            if not base_tag:
+                return leg_name, ""
+
+            display_label = tag_value_to_display_label(
+                compose_tag_value_with_leg(base_tag, leg_name)
+            )
+            if display_label not in side_neutral_tag_display_lookup:
+                display_label = next(
+                    (
+                        label
+                        for label, lookup_base_tag in side_neutral_tag_display_lookup.items()
+                        if lookup_base_tag == base_tag
+                    ),
+                    "",
+                )
+            if not display_label:
+                return leg_name, ""
+            return leg_name, display_label
+
+        def annotation_tag_selection_for_file(active_file_path):
+            return annotation_tag_selection_from_raw(get_default_tag_for_file(active_file_path))
+
+        initial_leg, initial_tag_display = annotation_tag_selection_for_file(current_file_path())
+        leg_var = tk.StringVar(value=initial_leg)
+        tag_editor_var = tk.StringVar(value=initial_tag_display)
+
+        tk.Label(class_frame, text="Leg:", font=("Segoe UI", 8)).grid(row=0, column=0, padx=5, pady=2, sticky="w")
+        leg_combo = ttk.Combobox(
+            class_frame,
+            textvariable=leg_var,
+            width=10,
+            state="readonly",
+            values=["Left", "Right"],
+        )
+        leg_combo.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+
+        tk.Label(class_frame, text="Tag:", font=("Segoe UI", 8)).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+        tag_editor_values = list(side_neutral_tag_display_lookup.keys())
         tag_editor_combo = ttk.Combobox(
             class_frame,
             textvariable=tag_editor_var,
             width=44,
+            height=max(1, len(tag_editor_values)),
             state="readonly",
-            values=list(tag_display_lookup.keys()),
+            values=tag_editor_values,
         )
-        tag_editor_combo.grid(row=0, column=1, columnspan=3, padx=5, pady=2, sticky="ew")
+        tag_editor_combo.grid(row=1, column=1, columnspan=3, padx=5, pady=2, sticky="ew")
 
-        tk.Label(class_frame, text="Thrombosis:", font=("Segoe UI", 8)).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+        tk.Label(class_frame, text="Thrombosis:", font=("Segoe UI", 8)).grid(row=2, column=0, padx=5, pady=2, sticky="w")
         thrombosis_var = tk.StringVar(
             value=thrombosis_value_to_label(ann_data["classification"]["thrombosis"])
         )
@@ -2031,9 +2076,9 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             state="readonly",
             values=list(THROMBOSIS_LABEL_BY_VALUE.values()),
         )
-        thrombosis_combo.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+        thrombosis_combo.grid(row=2, column=1, padx=5, pady=2, sticky="w")
 
-        tk.Label(class_frame, text="Compressibility:", font=("Segoe UI", 8)).grid(row=1, column=2, padx=5, pady=2, sticky="w")
+        tk.Label(class_frame, text="Compressibility:", font=("Segoe UI", 8)).grid(row=2, column=2, padx=5, pady=2, sticky="w")
         compressibility_var = tk.StringVar(
             value=compressibility_value_to_label(ann_data["classification"]["compressibility"])
         )
@@ -2044,14 +2089,14 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             state="readonly",
             values=list(COMPRESSIBILITY_LABEL_BY_VALUE.values()),
         )
-        compressibility_combo.grid(row=1, column=3, padx=5, pady=2, sticky="w")
+        compressibility_combo.grid(row=2, column=3, padx=5, pady=2, sticky="w")
 
-        tk.Label(class_frame, text="Review:", font=("Segoe UI", 8)).grid(row=2, column=0, padx=5, pady=2, sticky="w")
+        tk.Label(class_frame, text="Review:", font=("Segoe UI", 8)).grid(row=3, column=0, padx=5, pady=2, sticky="w")
         review_var = tk.BooleanVar(value=bool(ann_data["classification"]["_reviewed"]))
         review_checkbox = ttk.Checkbutton(class_frame, text="Reviewed", variable=review_var)
-        review_checkbox.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+        review_checkbox.grid(row=3, column=1, padx=5, pady=2, sticky="w")
 
-        tk.Label(class_frame, text="Protocol Deviation:", font=("Segoe UI", 8)).grid(row=3, column=0, padx=5, pady=2, sticky="w")
+        tk.Label(class_frame, text="Protocol Deviation:", font=("Segoe UI", 8)).grid(row=4, column=0, padx=5, pady=2, sticky="w")
         protocol_deviation_var = tk.BooleanVar(
             value=bool(ann_data["classification"]["protocol_deviation"])
         )
@@ -2060,12 +2105,12 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             text="Video not suitable for current protocol",
             variable=protocol_deviation_var,
         )
-        protocol_deviation_checkbox.grid(row=3, column=1, columnspan=3, padx=5, pady=2, sticky="w")
+        protocol_deviation_checkbox.grid(row=4, column=1, columnspan=3, padx=5, pady=2, sticky="w")
 
         protocol_deviation_notes_label = tk.Label(class_frame, text="Notes:", font=("Segoe UI", 8))
-        protocol_deviation_notes_label.grid(row=4, column=0, padx=5, pady=2, sticky="nw")
+        protocol_deviation_notes_label.grid(row=5, column=0, padx=5, pady=2, sticky="nw")
         protocol_deviation_notes_text = tk.Text(class_frame, height=2, width=40, wrap=tk.WORD, font=("Segoe UI", 8))
-        protocol_deviation_notes_text.grid(row=4, column=1, columnspan=3, padx=5, pady=2, sticky="ew")
+        protocol_deviation_notes_text.grid(row=5, column=1, columnspan=3, padx=5, pady=2, sticky="ew")
         protocol_deviation_notes_text.insert(
             tk.END,
             ann_data["classification"]["protocol_deviation_notes"],
@@ -2104,7 +2149,9 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
 
         def sync_classification_ui(active_file_path):
             refreshed = get_annotation_data(active_file_path)
-            tag_editor_var.set(tag_value_to_display_label(get_default_tag_for_file(active_file_path)))
+            selected_leg, selected_tag_display = annotation_tag_selection_for_file(active_file_path)
+            leg_var.set(selected_leg)
+            tag_editor_var.set(selected_tag_display)
             thrombosis_var.set(
                 thrombosis_value_to_label(refreshed["classification"]["thrombosis"])
             )
@@ -2115,6 +2162,12 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             protocol_deviation_var.set(bool(refreshed["classification"]["protocol_deviation"]))
             set_protocol_deviation_notes(refreshed["classification"]["protocol_deviation_notes"])
             toggle_protocol_deviation_notes()
+
+        def get_selected_annotation_tag_value():
+            base_tag = side_neutral_tag_display_lookup.get(tag_editor_var.get(), "")
+            if not base_tag:
+                return ""
+            return compose_tag_value_with_leg(base_tag, leg_var.get())
 
         def persist_classification(rename_file=True, overwrite_sidecars=True):
             active_file_path = current_file_path()
@@ -2130,7 +2183,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
             }
 
             try:
-                raw_tag = get_tag_value_from_display(tag_editor_var.get(), include_none=True) or "none"
+                raw_tag = get_selected_annotation_tag_value()
                 thrombosis_value = thrombosis_label_to_value(thrombosis_var.get())
                 compressibility_value = compressibility_label_to_value(compressibility_var.get())
                 save_classification_to_annotations(
@@ -2141,7 +2194,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                     protocol_deviation=bool(protocol_deviation_var.get()),
                     protocol_deviation_notes=get_protocol_deviation_notes(),
                 )
-                if rename_file:
+                if rename_file and raw_tag:
                     renamed_path = rename_anonymized_file(
                         active_file_path,
                         {
@@ -2153,6 +2206,11 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                     )
                     active_file_path = renamed_path
                     refresh_filepath_display()
+                elif rename_file:
+                    console_message(
+                        "Filename tag rename skipped because no annotation tag is selected.",
+                        level="debug",
+                    )
                 if overwrite_sidecars:
                     overwrite_managed_sidecars(active_file_path)
                 refresh_filepath_display()
@@ -2168,7 +2226,9 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 restored["classification"]["_reviewed_timestamp"] = previous["timestamp"]
                 restored["classification"]["protocol_deviation"] = previous["protocol_deviation"]
                 restored["classification"]["protocol_deviation_notes"] = previous["protocol_deviation_notes"]
-                tag_editor_var.set(tag_value_to_display_label(previous["tag"]))
+                previous_leg, previous_tag_display = annotation_tag_selection_from_raw(previous["tag"])
+                leg_var.set(previous_leg)
+                tag_editor_var.set(previous_tag_display)
                 sync_classification_ui(active_file_path)
                 messagebox.showerror("Rename failed", str(exc))
                 console_message(f"Failed to sync anonymized filename tag: {exc}", level="error")
@@ -2189,6 +2249,7 @@ def preview_file(file_path, source_stage, tag_value, selected_item, treeview):
                 protocol_deviation_notes=get_protocol_deviation_notes(),
             )
 
+        leg_combo.bind("<<ComboboxSelected>>", on_classification_change)
         tag_editor_combo.bind("<<ComboboxSelected>>", on_classification_change)
         thrombosis_combo.bind("<<ComboboxSelected>>", on_classification_change)
         compressibility_combo.bind("<<ComboboxSelected>>", on_classification_change)
