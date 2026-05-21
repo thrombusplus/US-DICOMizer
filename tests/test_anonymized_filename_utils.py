@@ -2,10 +2,13 @@ import unittest
 
 from anonymized_filename_utils import (
     build_anonymized_filename,
+    build_side_neutral_tag_display_lookup,
+    compose_tag_value_with_leg,
     compressibility_label_to_value,
     compressibility_value_to_label,
     group_tag_values_by_leg,
     parse_anonymized_filename,
+    split_tag_value_and_leg,
     tag_value_to_display_label,
     thrombosis_label_to_value,
     thrombosis_value_to_label,
@@ -96,6 +99,25 @@ class AnonymizedFilenameUtilsTests(unittest.TestCase):
             },
         )
 
+    def test_parse_preserves_identity_for_unrecognized_anonymized_tag(self):
+        parsed = parse_anonymized_filename(
+            "anonymized_case_42_0_001_CUSTOM.dcm",
+            ["CFV-R"],
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "patient_id": "case_42",
+                "file_no": "0_001",
+                "tag": "CUSTOM",
+                "thrombosis": "",
+                "dvt": "",
+                "compressibility": "",
+                "reviewed": False,
+            },
+        )
+
     def test_build_preserves_existing_file_number_format(self):
         filename = build_anonymized_filename(
             patient_id="P_01",
@@ -152,6 +174,49 @@ class AnonymizedFilenameUtilsTests(unittest.TestCase):
 
         self.assertEqual(grouped["Left Leg"], ("CFVr-L", "CFV-L", "CUSTOM"))
         self.assertEqual(grouped["Right Leg"], ("CFVr-R", "CFV-R", "OPT-R"))
+
+    def test_side_neutral_tag_lookup_excludes_none_and_collapses_leg_pairs(self):
+        lookup = build_side_neutral_tag_display_lookup(
+            [
+                "none",
+                "CFVr-L",
+                "CFV-L",
+                "CFVr-R",
+                "CFV-R",
+                "OPT-L",
+                "OPT-R",
+            ]
+        )
+
+        self.assertEqual(
+            lookup,
+            {
+                "Common Femoral Vein Random Image": "CFVr",
+                "Common Femoral Vein": "CFV",
+                "Optional View": "OPT",
+            },
+        )
+
+    def test_split_and_compose_tag_value_with_leg(self):
+        self.assertEqual(split_tag_value_and_leg("CFVr-L"), ("CFVr", "Left"))
+        self.assertEqual(split_tag_value_and_leg("CFVr-R"), ("CFVr", "Right"))
+        self.assertEqual(split_tag_value_and_leg("FV-D-R"), ("FV-D", "Right"))
+        self.assertEqual(split_tag_value_and_leg("OPT-L"), ("OPT", "Left"))
+
+        self.assertEqual(compose_tag_value_with_leg("CFVr", "Left"), "CFVr-L")
+        self.assertEqual(compose_tag_value_with_leg("CFVr", "Right"), "CFVr-R")
+        self.assertEqual(compose_tag_value_with_leg("FV-D", "Right"), "FV-D-R")
+        self.assertEqual(compose_tag_value_with_leg("OPT", "Left"), "OPT-L")
+
+    def test_right_leg_tag_preselects_and_recomposes_without_becoming_left(self):
+        base_tag, leg = split_tag_value_and_leg("CFVr-R")
+        lookup = build_side_neutral_tag_display_lookup(["CFVr-L", "CFVr-R"])
+        selected_display = tag_value_to_display_label(compose_tag_value_with_leg(base_tag, leg))
+
+        self.assertEqual((base_tag, leg), ("CFVr", "Right"))
+        self.assertEqual(selected_display, "Common Femoral Vein Random Image")
+        self.assertEqual(lookup[selected_display], "CFVr")
+        self.assertEqual(compose_tag_value_with_leg(lookup[selected_display], leg), "CFVr-R")
 
 
 if __name__ == "__main__":

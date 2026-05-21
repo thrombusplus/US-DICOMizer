@@ -108,6 +108,14 @@ COMPRESSIBILITY_VALUE_BY_LABEL = {
 
 GROUPED_FILE_NO_PATTERN = re.compile(r"^\d(?:_\d{3})+$")
 PLAIN_FILE_NO_PATTERN = re.compile(r"^\d+$")
+LEG_NAME_BY_SUFFIX = {
+    "-L": "Left",
+    "-R": "Right",
+}
+TAG_SUFFIX_BY_LEG_NAME = {
+    "Left": "-L",
+    "Right": "-R",
+}
 
 
 def looks_anonymized_filename(filename):
@@ -220,7 +228,7 @@ def tag_value_to_display_label(tag_value):
     normalized = str(tag_value or "").strip()
     if not normalized:
         return ""
-    return DEFAULT_TAG_LABEL_BY_VALUE.get(normalized, normalized)
+    return DEFAULT_TAG_LABEL_BY_VALUE.get(normalized, normalized).strip()
 
 
 def build_tag_display_lookup(tag_values):
@@ -233,6 +241,44 @@ def build_tag_display_lookup(tag_values):
         if label in lookup and lookup[label] != raw_value:
             label = f"{label} [{raw_value}]"
         lookup[label] = raw_value
+    return lookup
+
+
+def split_tag_value_and_leg(tag_value, default_leg="Left"):
+    normalized = str(tag_value or "").strip()
+    default_leg = default_leg if default_leg in TAG_SUFFIX_BY_LEG_NAME else "Left"
+    if not normalized or normalized.lower() == "none":
+        return "", default_leg
+
+    for suffix, leg_name in LEG_NAME_BY_SUFFIX.items():
+        if normalized.endswith(suffix):
+            return normalized[: -len(suffix)], leg_name
+
+    return "", default_leg
+
+
+def compose_tag_value_with_leg(base_tag, leg_name):
+    normalized_base = str(base_tag or "").strip()
+    suffix = TAG_SUFFIX_BY_LEG_NAME.get(str(leg_name or "").strip())
+    if not normalized_base or suffix is None:
+        return ""
+    return f"{normalized_base}{suffix}"
+
+
+def build_side_neutral_tag_display_lookup(tag_values):
+    lookup = {}
+    for raw_value in tag_values or ():
+        base_tag, _ = split_tag_value_and_leg(raw_value)
+        if not base_tag:
+            continue
+
+        display_label = tag_value_to_display_label(raw_value)
+        if not display_label:
+            continue
+
+        if display_label in lookup:
+            continue
+        lookup[display_label] = base_tag
     return lookup
 
 
@@ -329,6 +375,41 @@ def _split_patient_id_and_file_no(prefix):
     return None
 
 
+def _parse_unrecognized_anonymized_payload(payload):
+    parts = payload.split("_")
+    if len(parts) < 3:
+        return None
+
+    candidates = []
+    for file_no_start in range(1, len(parts) - 1):
+        for file_no_end in range(len(parts) - 1, file_no_start, -1):
+            patient_id = "_".join(parts[:file_no_start])
+            file_no = "_".join(parts[file_no_start:file_no_end])
+            tag = "_".join(parts[file_no_end:])
+
+            if not patient_id or not tag:
+                continue
+            is_grouped_file_no = GROUPED_FILE_NO_PATTERN.fullmatch(file_no)
+            is_plain_file_no = PLAIN_FILE_NO_PATTERN.fullmatch(file_no)
+            if is_grouped_file_no or is_plain_file_no:
+                candidates.append(
+                    (
+                        1 if is_grouped_file_no else 0,
+                        file_no_start,
+                        file_no_end - file_no_start,
+                        patient_id,
+                        file_no,
+                        tag,
+                    )
+                )
+
+    if not candidates:
+        return None
+
+    _, _, _, patient_id, file_no, tag = max(candidates)
+    return patient_id, file_no, tag
+
+
 def parse_anonymized_filename(filename, tag_values):
     stem = os.path.splitext(os.path.basename(filename))[0]
     if not stem.startswith("anonymized_"):
@@ -362,6 +443,19 @@ def parse_anonymized_filename(filename, tag_values):
             "dvt": compact["dvt"],
             "compressibility": compact["compressibility"],
             "reviewed": compact["reviewed"],
+        }
+
+    fallback = _parse_unrecognized_anonymized_payload(payload)
+    if fallback:
+        patient_id, file_no, tag = fallback
+        return {
+            "patient_id": patient_id,
+            "file_no": file_no,
+            "tag": tag,
+            "thrombosis": "",
+            "dvt": "",
+            "compressibility": "",
+            "reviewed": False,
         }
 
     return None
