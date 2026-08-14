@@ -90,9 +90,10 @@ Removed simpleTK and scikit-image modules as they are no longer used
 
 ## Citation
 
-If you use US-DICOMizer in a scientific publication, we would appreciate using the following citation:
+If you use US-DICOMizer in a scientific publication, we would appreciate using the following citations:
 
-- _Pechlivanis, D., Didaskalou, S., Kaldoudi, E. and Drosatos, G. (2025). Preparing Ultrasound Imaging Data for Artificial Intelligence Tasks: Anonymisation, Cropping, and Tagging. In Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 2: HEALTHINF, ISBN 978-989-758-731-3, ISSN 2184-4305, pages 951-958. DOI: [10.5220/0013379400003911](https://doi.org/10.5220/0013379400003911)_
+- Pechlivanis, D., Didaskalou, S., Kaldoudi, E. and Drosatos, G. (2025). Preparing Ultrasound Imaging Data for Artificial Intelligence Tasks: Anonymisation, Cropping, and Tagging. In Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 2: HEALTHINF, ISBN 978-989-758-731-3, ISSN 2184-4305, pages 951-958, SciTePress. DOI: [10.5220/0013379400003911](https://doi.org/10.5220/0013379400003911)
+- Pechlivanis, D., Didaskalou, S., Kaldoudi, E. and Drosatos, G. (2026). US-DICOMizer: An Open-Source Tool for Preparing Ultrasound DICOM Data for AI Applications. In Biomedical Engineering Systems and Technologies, ISBN 978-3-032-34459-5, pages 502-521, CCIS Vol. 3115, Springer. DOI: [10.1007/978-3-032-34459-5_24](https://doi.org/10.1007/978-3-032-34459-5_24)
 
 and as BibTeX:
 
@@ -100,7 +101,7 @@ and as BibTeX:
 @incollection{Pechlivanis_US-DICOMizer_2025,
     author       = {Pechlivanis, Dimitrios and Didaskalou, Stylianos and Kaldoudi, Eleni and Drosatos, George},
     title        = {Preparing Ultrasound Imaging Data for Artificial Intelligence Tasks: Anonymisation, Cropping, and Tagging},
-    keywords     = {Ultrasound Imaging;DICOM;Anonymisation;Cropping;Tagging;Artificial Intelligence (AI)},
+    keywords     = {Ultrasound Imaging; DICOM; Anonymisation; Cropping; Tagging; Artificial Intelligence (AI)},
     booktitle    = {Proceedings of the 18th International Joint Conference on Biomedical Engineering Systems and Technologies (BIOSTEC 2025) - Volume 2: HEALTHINF},
     volume       = {2},
     year         = {2025},
@@ -110,5 +111,21 @@ and as BibTeX:
     doi          = {10.5220/0013379400003911},
     isbn         = {978-989-758-731-3},
     issn         = {2184-4305}
+}
+
+@InProceedings{Pechlivanis_US-DICOMizer_2026,
+    author       = {Pechlivanis, Dimitrios and Didaskalou, Stylianos and Kaldoudi, Eleni and Drosatos, George},
+    title        = {US-DICOMizer: An Open-Source Tool for Preparing Ultrasound DICOM Data for AI Applications},
+    keywords     = {Ultrasound Imaging; DICOM; Anonymisation; Cropping; Tagging; Artificial Intelligence (AI)},
+    booktitle    = {Biomedical Engineering Systems and Technologies},
+    series       = {Communications in Computer and Information Science (CCIS)},
+    volume       = {3115},
+    year         = {2026},
+    pages        = {502-521},
+    editor       = {Fred, Ana and Gamboa, Hugo and Yousef, Malik and Bhavsar, Arnav and Pelayo, Sylvia and Kim, Jungsil and Concei{\c{c}}{\~a}o, Raquel},
+    publisher    = {Springer Nature Switzerland},
+    address      = {Cham, Switzerland},
+    doi          = {10.1007/978-3-032-34459-5_24},
+    isbn         = {978-3-032-34459-5}
 }
 ```
